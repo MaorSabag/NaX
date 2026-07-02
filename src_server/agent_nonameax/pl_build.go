@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"os/exec"
@@ -51,6 +52,24 @@ func writeBytesWriteMacro(buf *bytes.Buffer, name string, data []byte, perLine i
 	}
 	if len(data)%perLine != 0 {
 		buf.WriteString("\\\n")
+	}
+	buf.WriteString("} while(0)\n")
+}
+
+// writeBytesWriteMacro64 emits a WRITE macro using 8-byte stores. Per-byte
+// stores cause GCC's optimizer to spend minutes on large blobs (64K+);
+// 8-byte stores reduce AST nodes 8x and compile in seconds at -Os.
+func writeBytesWriteMacro64(buf *bytes.Buffer, name string, data []byte) {
+	fmt.Fprintf(buf, "#define %s( p ) do { \\\n", name)
+	i := 0
+	for i+8 <= len(data) {
+		val := binary.LittleEndian.Uint64(data[i:])
+		fmt.Fprintf(buf, "    *(unsigned long long*)((p)+%d) = 0x%016XULL; \\\n", i, val)
+		i += 8
+	}
+	for i < len(data) {
+		fmt.Fprintf(buf, "    (p)[%d]=0x%02X; \\\n", i, data[i])
+		i++
 	}
 	buf.WriteString("} while(0)\n")
 }
@@ -223,7 +242,7 @@ func generateSleepmaskH(bofBytes []byte) []byte {
 	buf.WriteString("/* Config_sleepmask.h - auto-generated sleepmask BOF embed\n")
 	fmt.Fprintf(&buf, " * %d bytes, included by Config.h */\n\n", len(bofBytes))
 
-	writeBytesWriteMacro(&buf, "NAX_SLEEPMASK_WRITE", bofBytes, 8, 4)
+	writeBytesWriteMacro64(&buf, "NAX_SLEEPMASK_WRITE", bofBytes)
 
 	return buf.Bytes()
 }

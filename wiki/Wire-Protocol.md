@@ -35,7 +35,7 @@ Binary framed protocol. All frames are AES-128-CBC encrypted before transmission
 | `mkdir` | `0x16` | Create directory |
 | `rmdir` | `0x17` | Remove directory |
 | `cat` | `0x18` | Read file contents |
-| `ls` | `0x19` | List directory (structured table output) |
+| `ls` | `0x19` | List directory (table or recursive tree) |
 | `bof` | `0x20` | Execute BOF (in-process COFF loader) |
 | `screenshot` | `0x21` | GDI desktop capture |
 | `download` | `0x22` | Download file from target to operator |
@@ -122,6 +122,41 @@ Tunnel results use a concatenated entry format inside a single RESULT frame:
 ```
 
 `Status` is `0x00` for success, non-zero for errors. The output format depends on the command - most return UTF-8 text, some return structured binary (screenshots, downloads, BOF media).
+
+## Commands with Flags Byte
+
+`rm` (`0x27`), `rmdir` (`0x17`), and `ls` (`0x19`) use a flags byte as the first byte of args:
+
+```
+flags(1) | path(variable)
+```
+
+| Bit | Command | Meaning |
+|-----|---------|---------|
+| `0x01` | `rm`, `rmdir` | Recursive force delete (`-rf`) |
+| `0x01` | `ls` | Recursive tree listing (`-r`) |
+
+When `path` is empty (flags byte only, `argsLen=1`), the command targets the current working directory.
+
+### ls Result Formats
+
+The `ls` result uses two formats, distinguished by the first byte:
+
+**Normal listing** (first byte != `0xFF`):
+
+```
+pathLen(2LE) | path | count(2LE) | entries[]
+```
+
+Each entry: `isDir(1) | attrs(1) | size(4LE) | mtime(4LE) | nameLen(1) | name`
+
+**Recursive tree** (first byte == `0xFF`):
+
+```
+0xFF | tree_text_utf8
+```
+
+The tree text is pre-rendered with Unicode box-drawing characters (`├─`, `└─`, `│`) and newlines. The server displays it as plain text.
 
 ## Encryption
 

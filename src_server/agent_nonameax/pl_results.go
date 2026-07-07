@@ -392,7 +392,12 @@ func (ext *ExtenderAgent) ProcessData(agentData adaptix.AgentData, decryptedData
 				}
 
 			case status == STATUS_OK && cmdId == CMD_LS:
-				displayText, clearText = decodeLsResult(data)
+				if len(data) > 1 && data[0] == 0xFF {
+					displayText = "Directory tree"
+					clearText = string(data[1:])
+				} else {
+					displayText, clearText = decodeLsResult(data)
+				}
 
 			case status == STATUS_OK && cmdId == CMD_PS_LIST:
 				displayText, clearText = decodePsListResult(agentData, taskIdStr, data)

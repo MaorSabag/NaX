@@ -18,12 +18,10 @@ FUNC INT NaxEncrypt( PNAX_INSTANCE Nax,
     if ( *out_len < NAX_AES_IV + pad_len )
         return NAX_ERR_NOMEM;
 
-    /* Generate a random IV directly into the output buffer. */
     if ( Nax->Bcrypt.BCryptGenRandom( NULL, out, NAX_AES_IV,
                                       BCRYPT_USE_SYSTEM_PREFERRED_RNG ) != 0 )
         return NAX_ERR_CRYPTO;
 
-    /* Open AES-CBC provider. */
     BCRYPT_ALG_HANDLE hAlg = NULL;
     BCRYPT_KEY_HANDLE hKey = NULL;
     INT               rc   = NAX_ERR_CRYPTO;

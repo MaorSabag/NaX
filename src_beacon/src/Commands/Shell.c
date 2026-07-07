@@ -40,10 +40,8 @@ FUNC static VOID CmdShellStart( PNAX_INSTANCE Nax, UINT32 terminalId, const PBYT
     MmCopy( cmdline, args + 4, progLen );
     cmdline[ progLen ] = '\0';
 
-    /* create stdin pipe: parent writes, child reads */
     HANDLE hStdinRead  = NULL;
     HANDLE hStdinWrite = NULL;
-    /* create stdout pipe: child writes, parent reads */
     HANDLE hStdoutRead  = NULL;
     HANDLE hStdoutWrite = NULL;
 
@@ -163,7 +161,6 @@ FUNC UINT32 NaxProcessShells( PNAX_INSTANCE Nax, PBYTE out, UINT32 out_cap ) {
     while ( *pp ) {
         NAX_SHELL* s = *pp;
 
-        /* ---- alive: drain stdout ---- */
         if ( s->State == NAX_JOB_RUNNING ) {
 
             /* send empty output once as STARTING notification */
@@ -177,7 +174,6 @@ FUNC UINT32 NaxProcessShells( PNAX_INSTANCE Nax, PBYTE out, UINT32 out_cap ) {
                 s->Started = 1;
             }
 
-            /* check whether child has exited */
             BOOL exited = ( Nax->Kernel32.WaitForSingleObject( s->hProcess, 0 ) == WAIT_OBJECT_0 );
 
             /* drain available stdout bytes - read directly into out to avoid extra stack buf */
@@ -211,15 +207,12 @@ FUNC UINT32 NaxProcessShells( PNAX_INSTANCE Nax, PBYTE out, UINT32 out_cap ) {
             continue;
         }
 
-        /* ---- finished or killed: final drain + send completion + unlink ---- */
         BYTE final_type = ( s->State == NAX_JOB_KILLED ) ? NAX_JOB_KILLED : NAX_JOB_COMPLETE;
 
         if ( s->State == NAX_JOB_KILLED ) {
-            /* terminate the child process */
             Nax->Ntdll.NtTerminateProcess( s->hProcess, 0 );
         }
 
-        /* drain any remaining stdout before reporting completion */
         for ( ;; ) {
             DWORD avail = 0;
             if ( !Nax->Kernel32.PeekNamedPipe( s->hStdoutRead, NULL, 0, NULL, &avail, NULL ) || avail == 0 )
@@ -243,7 +236,6 @@ FUNC UINT32 NaxProcessShells( PNAX_INSTANCE Nax, PBYTE out, UINT32 out_cap ) {
             written += 9 + bytesRead;
         }
 
-        /* send completion record */
         if ( final_type == NAX_JOB_COMPLETE ) {
             /* 4-byte exit status as data (via NtQueryInformationProcess) */
             PROCESS_BASIC_INFORMATION pbi;
@@ -259,7 +251,6 @@ FUNC UINT32 NaxProcessShells( PNAX_INSTANCE Nax, PBYTE out, UINT32 out_cap ) {
                 written += 13;
             }
         } else {
-            /* KILLED: empty data */
             if ( written + 9 <= out_cap ) {
                 out[ written ] = NAX_JOB_KILLED;
                 NaxW32( out + written + 1, s->TerminalId );
@@ -268,7 +259,6 @@ FUNC UINT32 NaxProcessShells( PNAX_INSTANCE Nax, PBYTE out, UINT32 out_cap ) {
             }
         }
 
-        /* unlink */
         *pp = s->Next;
         ShellFree( Nax, s );
     }

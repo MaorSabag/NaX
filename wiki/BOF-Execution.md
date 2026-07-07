@@ -103,7 +103,7 @@ If `.pdata` was registered dynamically (fallback path), `RtlDeleteFunctionTable`
 
 `NaxBofResolveExternal()` resolves symbols in three stages:
 
-1. **Beacon API table** - Hashes the symbol name (FNV1a-32) and checks against the 29-entry API table. Matches return the pointer to the beacon's implementation directly.
+1. **Beacon API table** - Hashes the symbol name (FNV1a-32) and checks against the 33-entry API table. Matches return the pointer to the beacon's implementation directly.
 
 2. **MODULE$FUNCTION pattern** - If the symbol contains `$` (e.g., `KERNEL32$VirtualAlloc`), the loader splits at `$`. The module name is lowercased, suffixed with `.dll`, hashed with FNV1a-32, and resolved via PEB walk (`NaxGetModule`). If the module is not loaded, `LoadLibraryA` loads it. The function is then resolved via `GetProcAddress` (not `NaxGetProc`) because `GetProcAddress` handles forwarded exports (e.g., `ole32!CreateStreamOnHGlobal` forwarded to `combase`) that the beacon's hash-based resolver cannot follow.
 
@@ -113,7 +113,7 @@ Unresolved symbols cause `NaxBofExecute` to abort with `NAX_ERR_FAIL` and send t
 
 ## Beacon API
 
-The beacon exposes 29 functions to BOFs, initialized at the start of every `NaxBofExecute` call via `NaxBofInitApiTable()`. Each entry is a hash/pointer pair; the hash is FNV1a-32 of the function name.
+The beacon exposes 33 functions to BOFs, initialized at the start of every `NaxBofExecute` call via `NaxBofInitApiTable()`. Each entry is a hash/pointer pair; the hash is FNV1a-32 of the function name.
 
 ### Data Parsing
 
@@ -165,9 +165,9 @@ void  BeaconFormatInt(formatp* fmt, int value);  // 4-byte big-endian
 ### Utility
 
 ```c
-BOOL BeaconIsAdmin(void);                        // stub (Phase 7A)
-BOOL BeaconUseToken(HANDLE token);               // stub
-void BeaconRevertToken(void);                     // stub
+BOOL BeaconIsAdmin(void);                        // checks token elevation via GetTokenInformation
+BOOL BeaconUseToken(HANDLE token);               // calls ImpersonateLoggedOnUser
+void BeaconRevertToken(void);                     // calls RevertToSelf
 void BeaconGetSpawnTo(BOOL x86, char* buf, int len);  // stub
 BOOL BeaconInformation(void* info);               // stub
 BOOL toWideChar(char* src, WCHAR* dst, int max);  // MultiByteToWideChar wrapper
@@ -209,6 +209,22 @@ void   BeaconWakeup(void);            // signals main thread to drain output
 HANDLE BeaconGetStopJobEvent(void);   // event handle, set when operator kills the job
 ```
 
+### KV Store
+
+Persistent key-value storage for BOFs to share state across executions. Keys are ANSI strings; values are opaque pointers. The store persists for the lifetime of the beacon.
+
+```c
+void  BeaconAddValue(const char* key, void* value);   // store or overwrite a key
+void* BeaconGetValue(const char* key);                 // retrieve value (NULL if missing)
+BOOL  BeaconRemoveValue(const char* key);              // remove key, returns TRUE if found
+```
+
+`BofGetProcessHeap` returns the beacon's private heap handle so BOFs can allocate persistent memory that survives beyond a single `go()` call:
+
+```c
+HANDLE BofGetProcessHeap(void);
+```
+
 ## Module Stomping
 
 When enabled, BOF `.text` executes from image-backed (IMG) memory instead of private (PRV) allocations. This avoids the "executable private memory" detection heuristic.
@@ -230,7 +246,7 @@ The stomp pool has two tiers:
 - **Sync slot** (1) - Used for synchronous BOF execution. Configured via `Config.BofSyncDll`.
 - **Async slots** (up to `BOF_STOMP_ASYNC_MAX`) - Used for async BOFs. Each concurrent async BOF needs its own slot. Configured via `Config.BofAsyncDlls[]`.
 
-Slot selection: if `CurrentJob == NULL` (sync), use the sync slot. Otherwise, pick the first free async slot whose `.text` capacity fits the BOF.
+Slot selection: if `NaxFindCurrentJob()` returns NULL (sync context), use the sync slot. Otherwise, pick the first free async slot whose `.text` capacity fits the BOF.
 
 ### Near Allocator
 
@@ -267,10 +283,9 @@ When the operator passes the `-a` flag, `NaxCmdBof()` creates a `NAX_JOB` and su
 The job thread:
 
 1. Sets `TEB->ArbitraryUserPointer` to the `NAX_INSTANCE` pointer (so `G_INSTANCE` works)
-2. Swaps `Nax->BofCtx` to the job's private output buffer (under a critical section)
-3. Calls `NaxBofExecute()`
-4. Swaps `BofCtx` back and marks the job as `NAX_JOB_FINISHED`
-5. Signals `JobWakeEvent` so the main thread drains output on the next heartbeat
+2. Calls `NaxBofExecute()` — each job has its own `BofCtx`; `NaxFindCurrentJob()` routes `BeaconOutput` calls to the correct job's buffer by matching `TEB->ThreadId`
+3. Marks the job as `NAX_JOB_FINISHED`
+4. Signals `JobWakeEvent` so the main thread drains output on the next heartbeat
 
 Output drains incrementally: `NaxProcessJobs()` runs each heartbeat, tries to acquire the job's critical section, and packs any accumulated output into job result frames.
 

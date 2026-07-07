@@ -24,7 +24,6 @@ FUNC UINT32 NaxProcessDownloads( PNAX_INSTANCE Nax, PBYTE out, UINT32 out_cap ) 
     while ( dl ) {
         NAX_DOWNLOAD* next = dl->Next;
 
-        /* ---- read one chunk ---- */
         UINT32 chunkSz = dl->ChunkSize ? dl->ChunkSize : Nax->Config.DlChunkSize;
         if ( chunkSz == 0 || chunkSz > NAX_DL_CHUNK_MAX )
             chunkSz = NAX_DL_CHUNK_DEFAULT;
@@ -46,7 +45,6 @@ FUNC UINT32 NaxProcessDownloads( PNAX_INSTANCE Nax, PBYTE out, UINT32 out_cap ) 
             ok = Nax->Kernel32.ReadFile( dl->hFile, out + off + 8 + 1 + 4, want, &nread, NULL );
 
         if ( !ok || ( want > 0 && nread == 0 ) ) {
-            /* read error - finish with what we have */
             Nax->Kernel32.CloseHandle( dl->hFile );
             *prev = next;
             Nax->Ntdll.RtlFreeHeap( Nax->Heap, 0, dl );
@@ -54,7 +52,6 @@ FUNC UINT32 NaxProcessDownloads( PNAX_INSTANCE Nax, PBYTE out, UINT32 out_cap ) 
             continue;
         }
 
-        /* pack CONTINUE entry */
         UINT32 data_len = 1 + 4 + nread;
         NaxW32( out + off, dl->TaskId );   off += 4;
         NaxW32( out + off, data_len );     off += 4;
@@ -64,7 +61,6 @@ FUNC UINT32 NaxProcessDownloads( PNAX_INSTANCE Nax, PBYTE out, UINT32 out_cap ) 
 
         dl->Index += nread;
 
-        /* check if download is complete */
         if ( dl->Index >= dl->FileSize ) {
             /* space check for FINISH entry: header(8) + sub(1) + fileId(4) = 13 */
             if ( off + 13 <= out_cap ) {

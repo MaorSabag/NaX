@@ -14,8 +14,9 @@ OUT          := $(DEPLOY_DIR)/agent_nonameax.so
 
 all: $(OUT)
 
-$(OUT): *.go
+$(OUT): *.go ax_config.axs config.yaml
 	GOEXPERIMENT=$(GOEXPERIMENT) go build -buildmode=plugin -o $(OUT) .
+	cp ax_config.axs config.yaml $(DEPLOY_DIR)/
 	@echo "  DEPLOY  $(OUT)"
 
 clean:

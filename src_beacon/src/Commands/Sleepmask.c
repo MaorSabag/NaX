@@ -150,7 +150,6 @@ FUNC INT NaxSleepmaskWire( PNAX_INSTANCE Nax, PBYTE coff, UINT32 coff_size ) {
     Nax->Gate = entry;
     Nax->GateSwaps.Count = 0;
 
-    /* Record sleepmask region for sleep obfuscation */
     if ( Nax->Ntdll.NtQueryVirtualMemory ) {
         MEMORY_BASIC_INFORMATION sm_mbi;
         MmZero( &sm_mbi, sizeof( sm_mbi ) );

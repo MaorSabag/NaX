@@ -29,7 +29,6 @@ FUNC INT NaxCmdSleep( PNAX_INSTANCE Nax,
     p[4]       = new_jitter;
     UINT32 pos = 5;
 
-    /* "sleep=" */
     CHAR pfx[] = { 's', 'l', 'e', 'e', 'p', '=' };
     MmCopy( out + pos, pfx, 6 );
     pos += 6;

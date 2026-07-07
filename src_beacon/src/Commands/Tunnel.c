@@ -121,8 +121,6 @@ FUNC VOID NaxTunnelRegisterSocket( PNAX_INSTANCE Nax, UINT_PTR sock, long events
 
 /* ========= [ pack tunnel result entry ] ========= */
 
-/* Append one tunnel result entry to the output buffer.
- * Returns bytes written, or 0 if not enough space. */
 FUNC UINT32 NaxTunnelPackEntry( PBYTE out, UINT32 cap, UINT32 cmdId,
                                  PBYTE payload, UINT32 payloadLen ) {
 
@@ -171,7 +169,6 @@ FUNC VOID NaxTunnelConnectTCP( PNAX_INSTANCE Nax, UINT32 channelId,
     }
     t->Sock = s;
 
-    /* non-blocking */
     ULONG nbio = 1;
     Nax->Ws2.ioctlsocket( s, NAX_FIONBIO, &nbio );
 
@@ -230,7 +227,6 @@ FUNC VOID NaxTunnelWriteTCP( PNAX_INSTANCE Nax, UINT32 channelId,
             return;
     }
 
-    /* buffer the remainder */
     UINT32 newSize = t->WriteBufSize + dataLen;
     if ( newSize > NAX_TUNNEL_HARD_CAP ) {
         t->State = NAX_TUNNEL_STATE_CLOSE;
@@ -278,11 +274,9 @@ FUNC VOID NaxTunnelReverse( PNAX_INSTANCE Nax, UINT32 tunnelId, UINT32 port ) {
     }
     t->Sock = s;
 
-    /* allow address reuse */
     INT reuse = 1;
     Nax->Ws2.setsockopt( s, NAX_SOL_SOCKET, NAX_SO_REUSEADDR, (PCHAR)&reuse, sizeof( reuse ) );
 
-    /* non-blocking */
     ULONG nbio = 1;
     Nax->Ws2.ioctlsocket( s, NAX_FIONBIO, &nbio );
 
@@ -394,10 +388,6 @@ FUNC UINT32 NaxProcessTunnels( PNAX_INSTANCE Nax, PBYTE out, UINT32 outCap ) {
     if ( !Nax->TunnelHead )
         return 0;
 
-    /* Consume per-socket WSA event records so TunnelEvent stays clear
-     * until the next real network event.  WSAResetEvent alone only
-     * resets the event object — internal per-socket records persist
-     * and re-signal immediately, causing a hot loop. */
     if ( Nax->Ws2.WSAEnumNetworkEvents ) {
         NAX_TUNNEL* ev = Nax->TunnelHead;
         while ( ev ) {
@@ -411,7 +401,6 @@ FUNC UINT32 NaxProcessTunnels( PNAX_INSTANCE Nax, PBYTE out, UINT32 outCap ) {
     UINT32 written = 0;
     UINT64 now     = Nax->Kernel32.GetTickCount64();
 
-    /* scratch for select */
     struct timeval tv;
     tv.tv_sec  = 0;
     tv.tv_usec = 0;
@@ -430,27 +419,27 @@ FUNC UINT32 NaxProcessTunnels( PNAX_INSTANCE Nax, PBYTE out, UINT32 outCap ) {
 
             INT sr = Nax->Ws2.select( 0, NULL, &wfds, &efds, &tv );
             if ( sr > 0 && NaxFdIsSet( t->Sock, &wfds ) && !NaxFdIsSet( t->Sock, &efds ) ) {
+
                 t->State = NAX_TUNNEL_STATE_READY;
-                /* pack CONNECT_TCP result: channelId(4) | type(4) | result(4) = success(0) */
                 BYTE rb[12];
                 UINT32 chId = t->ChannelId, tp = t->Type, res = 0;
                 rb[0] = (BYTE)chId; rb[1] = (BYTE)(chId>>8); rb[2] = (BYTE)(chId>>16); rb[3] = (BYTE)(chId>>24);
                 rb[4] = (BYTE)tp;   rb[5] = (BYTE)(tp>>8);   rb[6] = (BYTE)(tp>>16);   rb[7] = (BYTE)(tp>>24);
                 rb[8] = (BYTE)res;  rb[9] = (BYTE)(res>>8);  rb[10]= (BYTE)(res>>16);  rb[11]= (BYTE)(res>>24);
-                UINT32 w = NaxTunnelPackEntry( out + written, outCap - written,
-                                                NAX_CMD_TUNNEL_CONNECT_TCP, rb, 12 );
+                UINT32 w = NaxTunnelPackEntry( out + written, outCap - written, NAX_CMD_TUNNEL_CONNECT_TCP, rb, 12 );
                 written += w;
+
             } else if ( t->WaitTime > 0 && ( now - t->StartTick ) > t->WaitTime ) {
+                
                 t->State = NAX_TUNNEL_STATE_CLOSE;
-                /* pack failure result */
                 BYTE rb[12];
                 UINT32 chId = t->ChannelId, tp = t->Type, res = 1;
                 rb[0] = (BYTE)chId; rb[1] = (BYTE)(chId>>8); rb[2] = (BYTE)(chId>>16); rb[3] = (BYTE)(chId>>24);
                 rb[4] = (BYTE)tp;   rb[5] = (BYTE)(tp>>8);   rb[6] = (BYTE)(tp>>16);   rb[7] = (BYTE)(tp>>24);
                 rb[8] = (BYTE)res;  rb[9] = (BYTE)(res>>8);  rb[10]= (BYTE)(res>>16);  rb[11]= (BYTE)(res>>24);
-                UINT32 w = NaxTunnelPackEntry( out + written, outCap - written,
-                                                NAX_CMD_TUNNEL_CONNECT_TCP, rb, 12 );
+                UINT32 w = NaxTunnelPackEntry( out + written, outCap - written, NAX_CMD_TUNNEL_CONNECT_TCP, rb, 12 );
                 written += w;
+
             }
         }
 
@@ -466,7 +455,6 @@ FUNC UINT32 NaxProcessTunnels( PNAX_INSTANCE Nax, PBYTE out, UINT32 outCap ) {
                 INT caLen = sizeof( ca );
                 UINT_PTR cs = Nax->Ws2.accept( t->Sock, (struct sockaddr*)&ca, &caLen );
                 if ( cs != (UINT_PTR)-1 ) {
-                    /* non-blocking on accepted socket */
                     ULONG nbio = 1;
                     Nax->Ws2.ioctlsocket( cs, NAX_FIONBIO, &nbio );
                     NaxTunnelRegisterSocket( Nax, cs, NAX_FD_READ | NAX_FD_WRITE | NAX_FD_CLOSE );
@@ -485,8 +473,7 @@ FUNC UINT32 NaxProcessTunnels( PNAX_INSTANCE Nax, PBYTE out, UINT32 outCap ) {
                         UINT32 tid = t->ChannelId;
                         ab[0] = (BYTE)tid; ab[1] = (BYTE)(tid>>8); ab[2] = (BYTE)(tid>>16); ab[3] = (BYTE)(tid>>24);
                         ab[4] = (BYTE)newChId; ab[5] = (BYTE)(newChId>>8); ab[6] = (BYTE)(newChId>>16); ab[7] = (BYTE)(newChId>>24);
-                        UINT32 w = NaxTunnelPackEntry( out + written, outCap - written,
-                                                        NAX_CMD_TUNNEL_ACCEPT, ab, 8 );
+                        UINT32 w = NaxTunnelPackEntry( out + written, outCap - written, NAX_CMD_TUNNEL_ACCEPT, ab, 8 );
                         written += w;
                     } else {
                         Nax->Ws2.closesocket( cs );
@@ -498,7 +485,6 @@ FUNC UINT32 NaxProcessTunnels( PNAX_INSTANCE Nax, PBYTE out, UINT32 outCap ) {
         t = next;
     }
 
-    /* ---- Phase 2: Flush write buffers (READY only, matching reference agent) ---- */
     t = Nax->TunnelHead;
     while ( t ) {
         if ( t->State == NAX_TUNNEL_STATE_READY
@@ -511,7 +497,7 @@ FUNC UINT32 NaxProcessTunnels( PNAX_INSTANCE Nax, PBYTE out, UINT32 outCap ) {
                 if ( sent > 0 ) {
                     totalSent += (UINT32)sent;
                 } else {
-                    break;  /* WSAEWOULDBLOCK or error */
+                    break; 
                 }
             }
 
@@ -566,25 +552,22 @@ FUNC UINT32 NaxProcessTunnels( PNAX_INSTANCE Nax, PBYTE out, UINT32 outCap ) {
                 if ( sr <= 0 || !NaxFdIsSet( t->Sock, &rfds ) )
                     break;
 
-                /* recv into output buffer directly after the entry header space */
                 UINT32 space = outCap - written;
                 if ( space < NAX_TUNNEL_RECV_HDR_RESERVE ) break;
                 UINT32 maxRecv = space - NAX_TUNNEL_RECV_HDR_RESERVE;
                 if ( maxRecv > NAX_TUNNEL_RECV_CHUNK_MAX ) maxRecv = NAX_TUNNEL_RECV_CHUNK_MAX;
 
-                BYTE* recvBase = out + written + 8 + 8;  /* skip entryLen(4)+cmdId(4) + channelId(4)+dataLen(4) */
+                BYTE* recvBase = out + written + 8 + 8;  
                 INT got = Nax->Ws2.recv( t->Sock, (PCHAR)recvBase, (INT)maxRecv, 0 );
 
                 if ( got > 0 ) {
-                    /* build payload header: channelId(4) | dataLen(4) */
                     BYTE ph[8];
                     UINT32 chId = t->ChannelId;
                     ph[0] = (BYTE)chId; ph[1] = (BYTE)(chId>>8); ph[2] = (BYTE)(chId>>16); ph[3] = (BYTE)(chId>>24);
                     ph[4] = (BYTE)got;  ph[5] = (BYTE)(got>>8);  ph[6] = (BYTE)(got>>16);  ph[7] = (BYTE)(got>>24);
                     MmCopy( out + written + 8, ph, 8 );
 
-                    /* build entry header: entryLen(4) | cmdId(4) */
-                    UINT32 entryLen = 4 + 8 + (UINT32)got;  /* cmdId + channelId + dataLen + data */
+                    UINT32 entryLen = 4 + 8 + (UINT32)got;  
                     UINT32 total = 4 + entryLen;
                     out[written]   = (BYTE)entryLen;
                     out[written+1] = (BYTE)(entryLen>>8);
@@ -599,11 +582,9 @@ FUNC UINT32 NaxProcessTunnels( PNAX_INSTANCE Nax, PBYTE out, UINT32 outCap ) {
                     written   += total;
                     totalRecv += (UINT32)got;
                 } else if ( got == 0 ) {
-                    /* graceful close */
                     t->State = NAX_TUNNEL_STATE_CLOSE;
                     break;
                 } else {
-                    /* error: WSAEWOULDBLOCK is normal, anything else means close */
                     INT err = Nax->Ws2.WSAGetLastError();
                     if ( err != NAX_WSAEWOULDBLOCK )
                         t->State = NAX_TUNNEL_STATE_CLOSE;
@@ -626,14 +607,12 @@ FUNC UINT32 NaxProcessTunnels( PNAX_INSTANCE Nax, PBYTE out, UINT32 outCap ) {
     }
 
     /* ---- Phase 4: Cleanup closed tunnels ---- */
-    /* CloseTimer states: 0=fresh, 1=draining write buffer, 2=shutdown sent (grace) */
     t = Nax->TunnelHead;
     while ( t ) {
         NAX_TUNNEL* next = t->Next;
 
         if ( t->State == NAX_TUNNEL_STATE_CLOSE ) {
 
-            /* still draining write buffer - let Phase 2 flush it */
             if ( t->WriteBuf && t->WriteBufSize > 0 ) {
                 if ( t->CloseTimer == 0 ) {
                     t->CloseTimer = 1;
@@ -647,7 +626,6 @@ FUNC UINT32 NaxProcessTunnels( PNAX_INSTANCE Nax, PBYTE out, UINT32 outCap ) {
                 continue;
             }
 
-            /* buffer empty - send shutdown if not done yet */
             if ( t->CloseTimer <= 1 ) {
                 t->CloseTimer = 2;
                 t->StartTick  = now;

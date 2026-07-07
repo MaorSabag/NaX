@@ -20,7 +20,6 @@ func parseProfileConfig(cfg map[string]any) *ProfileConfig {
 		},
 	}
 
-	// Debug: log all config keys
 	keys := make([]string, 0, len(cfg))
 	for k := range cfg { keys = append(keys, k) }
 	naxListenerLogInfo("parseProfileConfig: keys=%v", keys)

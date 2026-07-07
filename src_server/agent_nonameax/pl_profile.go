@@ -101,7 +101,6 @@ func parseProfileFromListenerConfig(cfg map[string]any) *ProfileConfig {
 		}
 	}
 
-	// Extra headers -> GET client headers
 	if raw, ok := cfg["extra_headers"].([]any); ok && len(raw) > 0 {
 		p.Get.ClientHeaders = map[string]string{}
 		for _, u := range raw {
@@ -113,7 +112,6 @@ func parseProfileFromListenerConfig(cfg map[string]any) *ProfileConfig {
 		}
 	}
 
-	// Cookie name -> GET client meta as cookie
 	cookieName := "__session"
 	if cn, ok := cfg["cookie_name"].(string); ok && cn != "" {
 		cookieName = cn

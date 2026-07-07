@@ -15,7 +15,7 @@ Every beacon function accesses state through a pointer to `NAX_INSTANCE`, stored
 | `Ntdll`, `Kernel32`, `Bcrypt`, `Winhttp`, ... | DLL bundles - each holds only resolved function pointers from that DLL |
 | `BofCtx` | Current BOF execution context (output buffer, media list) |
 | `BofStompPool` | BOF module stomping slot pool (sync + async DLLs) |
-| `JobHead` / `CurrentJob` | Linked list of async BOF jobs |
+| `JobHead` | Linked list of async BOF jobs |
 | `PivotHead` | SMB pivot linked list |
 | `Ws2` (NAX_WS2) | Lazy-loaded winsock2 function pointers |
 | `TunnelHead` | Tunnel channel linked list |

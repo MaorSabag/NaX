@@ -480,7 +480,6 @@ func (s *httpServer) writeServerResponse(w http.ResponseWriter, tx *HTTPTransact
 		return
 	}
 
-	// Apply server headers from profile
 	if tx.ServerHeaders != nil {
 		for k, v := range tx.ServerHeaders {
 			w.Header().Set(k, v)

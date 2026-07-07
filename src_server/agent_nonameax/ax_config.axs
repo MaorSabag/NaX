@@ -324,7 +324,8 @@ function RegisterCommands(listenerType)
     let cmd_mkdir = ax.create_command("mkdir", "Create a directory", "mkdir {path}", "Queuing mkdir...");
     cmd_mkdir.addArgString("path", true, "Directory path to create");
 
-    let cmd_rmdir = ax.create_command("rmdir", "Remove a directory", "rmdir {path}", "Queuing rmdir...");
+    let cmd_rmdir = ax.create_command("rmdir", "Remove a directory", "rmdir [-rf] {path}", "Queuing rmdir...");
+    cmd_rmdir.addArgBool("-rf", "Recursive force delete (remove directory and all contents)");
     cmd_rmdir.addArgString("path", true, "Directory path to remove");
 
     let cmd_cat = ax.create_command("cat", "Read and display a file", "cat {path}", "Queuing cat...");
@@ -344,8 +345,9 @@ function RegisterCommands(listenerType)
         "terminate process",
         "Queuing terminate process..."
     );
-    let cmd_rm = ax.create_command("rm", "Delete a file", "rm {path}", "Queuing rm...");
-    cmd_rm.addArgString("path", true, "File path to delete");
+    let cmd_rm = ax.create_command("rm", "Delete a file or directory", "rm [-rf] {path}", "Queuing rm...");
+    cmd_rm.addArgBool("-rf", "Recursive force delete (remove read-only files, recurse into directories)");
+    cmd_rm.addArgString("path", true, "File or directory path to delete");
 
     // ---- download ----
     let cmd_download = ax.create_command("download", "Download a file from the agent machine", "download {path} {chunk_size}", "Queuing download...");
@@ -427,7 +429,8 @@ function RegisterCommands(listenerType)
     let cmd_token = ax.create_command("token", "Token manipulation — steal, impersonate, create, list, revoke");
     cmd_token.addSubCommands([cmd_token_getuid, cmd_token_steal, cmd_token_impersonate, cmd_token_list, cmd_token_rm, cmd_token_revert, cmd_token_make, cmd_token_privs]);
 
-    let cmd_ls = ax.create_command("ls", "List directory contents", "ls {path}", "Queuing ls...");
+    let cmd_ls = ax.create_command("ls", "List directory contents", "ls [-r] {path}", "Queuing ls...");
+    cmd_ls.addArgBool("-r", "Recursive tree listing");
     cmd_ls.addArgString("path", false, "Directory to list (default: current working directory)");
 
     let cmd_terminate = ax.create_command(

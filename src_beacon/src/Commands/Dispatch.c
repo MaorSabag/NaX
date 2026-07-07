@@ -11,9 +11,6 @@
 
 /* ========= [ dispatcher ] ========= */
 
-/* Execute task; fill result buffers.
- * result_data must be at least 512 bytes (caller's responsibility).
- * Returns 1 if a result frame should be sent back, 0 if not (e.g. exit commands). */
 FUNC INT NaxDispatch( PNAX_INSTANCE    Nax,
                       const NAX_TASK*  task,
                       UINT32*          result_task_id,
@@ -52,7 +49,6 @@ FUNC INT NaxDispatch( PNAX_INSTANCE    Nax,
         return 0;
 
     /* ---- CMD_CD (0x14) ---- */
-    /* Core.c sets *result_data_len=0 on success, Win32 error (4 bytes) on fail */
     case NAX_CMD_CD:
         *result_status = ( CmdCd( Nax, task->Args, (UINT32)task->ArgsLen, result_data, result_data_len ) == NAX_OK )
                              ? NAX_STATUS_OK : NAX_STATUS_ERR;

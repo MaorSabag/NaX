@@ -20,7 +20,6 @@ FUNC VOID NaxInitConfig( PNAX_INSTANCE Nax ) {
     volatile BYTE *k = (volatile BYTE *)Nax->Config.AesKey;
     NAX_AES_KEY_WRITE( k );
 
-    /* chunked download default */
     Nax->Config.DlChunkSize = NAX_DL_CHUNK_DEFAULT;
 
     /* listener watermark - used in SMB beat for pivot routing */

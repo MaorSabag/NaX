@@ -15,9 +15,9 @@ Quick-reference for all NoNameAx (NaX) beacon commands available in the Adaptix 
 | `cd` | `0x14` | Navigation | Change working directory |
 | `pwd` | `0x15` | Navigation | Print working directory |
 | `mkdir` | `0x16` | File Ops | Create directory |
-| `rmdir` | `0x17` | File Ops | Remove directory |
+| `rmdir` | `0x17` | File Ops | Remove directory (`-rf` for recursive) |
 | `cat` | `0x18` | File Ops | Read file contents |
-| `ls` | `0x19` | Navigation | List directory contents |
+| `ls` | `0x19` | Navigation | List directory contents (`-r` for recursive tree) |
 | `bof` | `0x20` | Execution | Execute a Beacon Object File |
 | `execute bof` | `0x20` | Execution | Execute BOF (Extension-Kit compatible) |
 | `screenshot` | `0x21` | Recon | GDI desktop capture |
@@ -26,9 +26,10 @@ Quick-reference for all NoNameAx (NaX) beacon commands available in the Adaptix 
 | `ps kill` | `0x24` | Process | Terminate process by PID |
 | `ps run` | `0x25` | Process | Run a new program |
 | `upload` | `0x26` | File Ops | Upload file to target |
-| `rm` | `0x27` | File Ops | Delete a file |
+| `rm` | `0x27` | File Ops | Delete file or directory (`-rf` for recursive) |
 | `job list` | `0x28` | Execution | List active async BOF jobs |
 | `job kill` | `0x29` | Execution | Kill an async BOF job |
+| `watchdog` | `0x2C` | Config | Toggle job watchdog on/off at runtime |
 | `token getuid` | `0x50` | Token | Current effective identity |
 | `token steal` | `0x51` | Token | Duplicate token from a running process |
 | `token use` | `0x52` | Token | Impersonate a stored token by ID |
@@ -81,13 +82,28 @@ pwd
 List the contents of a directory. Defaults to the current working directory if no path is given. Output is a structured table rendered by the Adaptix UI.
 
 ```
-ls [path]
+ls [-r] [path]
 ```
 
 ```
 ls
 ls C:\Windows\Temp
+ls -r C:\Users\admin\Desktop
 ```
+
+When `-r` is used, the listing is recursive and rendered as a tree with Unicode box-drawing characters:
+
+```
+C:\Users\admin\Desktop
+├─ Documents/
+│   ├─ report.docx
+│   └─ notes.txt
+├─ Tools/
+│   └─ nc.exe
+└─ README.txt
+```
+
+Recursion depth is capped at 16 levels. Directories are shown with a trailing `/`.
 
 ---
 
@@ -108,14 +124,15 @@ cat ..\..\flag.txt
 
 ### rm
 
-Delete a single file.
+Delete a file or directory. With `-rf`, recursively deletes directories and forces removal of read-only files.
 
 ```
-rm <file>
+rm [-rf] <path>
 ```
 
 ```
 rm C:\Temp\payload.exe
+rm -rf C:\Temp\staging
 ```
 
 ### mkdir
@@ -132,14 +149,15 @@ mkdir C:\Temp\staging
 
 ### rmdir
 
-Remove a directory. The directory must be empty.
+Remove a directory. Without `-rf`, the directory must be empty. With `-rf`, recursively deletes all contents including read-only files.
 
 ```
-rmdir <path>
+rmdir [-rf] <path>
 ```
 
 ```
 rmdir C:\Temp\staging
+rmdir -rf C:\Temp\staging
 ```
 
 ### download
@@ -434,6 +452,17 @@ job kill a1b2c3d4
 ```
 
 The task ID is the hex identifier shown by `job list` and in the task output when the async BOF was queued.
+
+### watchdog
+
+Toggle the async BOF watchdog timer at runtime. When enabled (default), jobs that exceed their timeout are automatically killed. Disabling allows long-running BOFs to run indefinitely.
+
+```
+watchdog on
+watchdog off
+```
+
+When the watchdog is disabled, async BOFs will never be killed by timeout — only manual `job kill` will stop them. Re-enabling the watchdog applies to all future jobs; already-running jobs retain their original timeout.
 
 ---
 

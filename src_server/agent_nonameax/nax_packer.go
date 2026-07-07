@@ -124,16 +124,13 @@ func packNaxBin(loader, beacon, pdata, xdata []byte, textRva, flags uint32, dllN
 		entryRF, entryUI := buildEntryUnwind()
 		uiSize := uint32(len(entryUI))
 
-		// Shift existing UnwindData offsets by the prepended UNWIND_INFO size
 		for i := 0; i < len(pdata)/12; i++ {
 			off := i*12 + 8
 			u := binary.LittleEndian.Uint32(pdata[off:])
 			binary.LittleEndian.PutUint32(pdata[off:], u+uiSize)
 		}
 
-		// Prepend entry RUNTIME_FUNCTION to pdata
 		pdata = append(entryRF[:], pdata...)
-		// Prepend entry UNWIND_INFO to xdata
 		xdata = append(entryUI[:], xdata...)
 	}
 

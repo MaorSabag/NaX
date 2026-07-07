@@ -172,6 +172,7 @@
 #define H_GETFILESIZE                0x7C072ED8u  /* GetFileSize */
 #define H_GETLASTERROR               0x84BD9597u  /* GetLastError */
 #define H_GETPROCESSMITIGATIONPOLICY 0x7BC86641u  /* GetProcessMitigationPolicy */
+#define H_SETFILEATTRIBUTESA         0x016537C7u  /* SetFileAttributesA */
 
 /* kernelbase.dll */
 #define H_KERNELBASE_DLL             0x91624877u

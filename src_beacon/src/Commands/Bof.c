@@ -18,7 +18,6 @@
 #include "Common.h"
 #include "Bof.h"
 
-/* Write 4-byte LE integer */
 static VOID BofW32( PBYTE p, UINT32 v ) {
     p[0] = (BYTE)v; p[1] = (BYTE)( v >> 8 ); p[2] = (BYTE)( v >> 16 ); p[3] = (BYTE)( v >> 24 );
 }

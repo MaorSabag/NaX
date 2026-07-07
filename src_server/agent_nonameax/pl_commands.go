@@ -31,6 +31,23 @@ func buildPathCmd(cmdId byte, cmdName string, path string) ([]byte, error) {
 	return data, nil
 }
 
+func buildPathCmdFlags(cmdId byte, cmdName string, path string, recursive bool) ([]byte, error) {
+	pathBytes := []byte(path)
+	if len(pathBytes) > maxPathBytes {
+		return nil, fmt.Errorf("nonameax: %s: path too long (max %d bytes)", cmdName, maxPathBytes)
+	}
+	flags := byte(0x00)
+	if recursive {
+		flags = 0x01
+	}
+	data := make([]byte, 5+1+len(pathBytes))
+	data[0] = cmdId
+	binary.LittleEndian.PutUint32(data[1:5], uint32(1+len(pathBytes)))
+	data[5] = flags
+	copy(data[6:], pathBytes)
+	return data, nil
+}
+
 func formatSleepMs(ms uint32) string {
 	if ms == 0 {
 		return "0s"
@@ -171,12 +188,17 @@ func (ext *ExtenderAgent) CreateCommand(agentData adaptix.AgentData, args map[st
 			return adaptix.TaskData{}, adaptix.ConsoleMessageData{},
 				errors.New("nonameax: rmdir: 'path' argument required")
 		}
-		data, err := buildPathCmd(CMD_RMDIR, "rmdir", path)
+		rf, _ := args["-rf"].(bool)
+		data, err := buildPathCmdFlags(CMD_RMDIR, "rmdir", path, rf)
 		if err != nil {
 			return adaptix.TaskData{}, adaptix.ConsoleMessageData{}, err
 		}
+		label := fmt.Sprintf("rmdir %s task queued", path)
+		if rf {
+			label = fmt.Sprintf("rmdir -rf %s task queued", path)
+		}
 		task := adaptix.TaskData{Type: taskTypeTask, Data: data, Sync: true}
-		msg := adaptix.ConsoleMessageData{Status: messageSeverityInfo, Message: fmt.Sprintf("rmdir %s task queued", path)}
+		msg := adaptix.ConsoleMessageData{Status: messageSeverityInfo, Message: label}
 		return task, msg, nil
 
 	case "rm":
@@ -185,12 +207,17 @@ func (ext *ExtenderAgent) CreateCommand(agentData adaptix.AgentData, args map[st
 			return adaptix.TaskData{}, adaptix.ConsoleMessageData{},
 				errors.New("nonameax: rm: 'path' argument required")
 		}
-		data, err := buildPathCmd(CMD_RM, "rm", path)
+		rf, _ := args["-rf"].(bool)
+		data, err := buildPathCmdFlags(CMD_RM, "rm", path, rf)
 		if err != nil {
 			return adaptix.TaskData{}, adaptix.ConsoleMessageData{}, err
 		}
+		label := fmt.Sprintf("rm %s queued", path)
+		if rf {
+			label = fmt.Sprintf("rm -rf %s queued", path)
+		}
 		task := adaptix.TaskData{Type: taskTypeTask, Data: data, Sync: true}
-		msg := adaptix.ConsoleMessageData{Status: messageSeverityInfo, Message: fmt.Sprintf("rm %s queued", path)}
+		msg := adaptix.ConsoleMessageData{Status: messageSeverityInfo, Message: label}
 		return task, msg, nil
 
 	case "cat":
@@ -209,18 +236,20 @@ func (ext *ExtenderAgent) CreateCommand(agentData adaptix.AgentData, args map[st
 
 	case "ls":
 		path, _ := args["path"].(string)
-		var data []byte
-		if path == "" {
-			data = []byte{CMD_LS, 0x00, 0x00, 0x00, 0x00}
-		} else {
-			var err error
-			data, err = buildPathCmd(CMD_LS, "ls", path)
-			if err != nil {
-				return adaptix.TaskData{}, adaptix.ConsoleMessageData{}, err
-			}
+		recursive := false
+		if r, ok := args["-r"].(bool); ok {
+			recursive = r
+		}
+		data, err := buildPathCmdFlags(CMD_LS, "ls", path, recursive)
+		if err != nil {
+			return adaptix.TaskData{}, adaptix.ConsoleMessageData{}, err
 		}
 		lsMsg := "ls (current directory) task queued"
-		if path != "" {
+		if recursive && path != "" {
+			lsMsg = fmt.Sprintf("ls -r %s task queued", path)
+		} else if recursive {
+			lsMsg = "ls -r (current directory) task queued"
+		} else if path != "" {
 			lsMsg = fmt.Sprintf("ls %s task queued", path)
 		}
 		task := adaptix.TaskData{Type: taskTypeTask, Data: data, Sync: true}

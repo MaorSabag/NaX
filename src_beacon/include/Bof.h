@@ -127,7 +127,7 @@ typedef struct {
 
 typedef struct {
     UINT32 Hash;   /* FNV1a-32 of function name (no __imp_ prefix) */
-    PVOID  Proc;   /* pointer to our implementation                 */
+    PVOID  Proc;
 } NAX_BOF_API;
 
 #define NAX_BOF_API_COUNT 33   /* 15 original + 6 beacon.h + 2 adaptix.h + 4 Win32 proxy + 2 async BOF + 3 KV store + 1 heap redirect */

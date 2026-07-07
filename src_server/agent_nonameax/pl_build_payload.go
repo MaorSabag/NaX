@@ -320,7 +320,6 @@ func (p *PluginAgent) BuildPayload(profile adaptix.BuildProfile, agentProfiles [
 		configH = obfBuf.Bytes()
 	}
 
-	// Append BOF stomp config to Config.h
 	{
 		var bofBuf bytes.Buffer
 		bofBuf.Write(configH)
@@ -359,7 +358,6 @@ func (p *PluginAgent) BuildPayload(profile adaptix.BuildProfile, agentProfiles [
 		}
 	}
 
-	// Append sleepmask embed to Config.h
 	if len(sleepmaskBytes) > 0 {
 		var smBuf bytes.Buffer
 		smBuf.Write(configH)

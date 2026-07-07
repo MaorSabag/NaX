@@ -388,6 +388,17 @@ let group = ax.create_commands_group("NoNameAx", [
 - **Agent name is case-sensitive.** The filter array must use `"NoNameAx"` (mixed case), matching `config.yaml` exactly.
 - **`container.put()` only accepts widget objects**, not bare values. If you add build-UI fields, always pass the widget.
 - **`addArgBool` takes exactly 2 parameters.** The dash is part of the name: `addArgBool("-flag", "description")`.
+- **Define `addArgBool` BEFORE `addArgString`.** The Adaptix parser iterates arg definitions in order. If a positional `addArgString` is defined first, it greedily consumes the next token — even if that token is a flag like `-r`. Put all `addArgBool` calls before any `addArgString` so flags are matched first:
+
+```javascript
+// CORRECT — flags checked before positionals:
+cmd_foo.addArgBool("-v", "Verbose output");
+cmd_foo.addArgString("path", false, "Target path");
+
+// WRONG — "-v" gets consumed as the path value:
+cmd_foo.addArgString("path", false, "Target path");
+cmd_foo.addArgBool("-v", "Verbose output");
+```
 
 ### Sub-commands
 

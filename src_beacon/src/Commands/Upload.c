@@ -24,7 +24,6 @@ FUNC INT NaxCmdUpload( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBY
     MmCopy( path_buf, args + 8, path_len );
     path_buf[ path_len ] = '\0';
 
-    /* Look up accumulated data */
     NAX_MEMSAVE* ms = NaxMemSaveGet( Nax, memoryId );
     if ( !ms || !ms->Buffer ) {
         Nax->Ntdll.RtlFreeHeap( Nax->Heap, 0, path_buf );

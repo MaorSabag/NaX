@@ -588,6 +588,29 @@ func (ext *ExtenderAgent) CreateCommand(agentData adaptix.AgentData, args map[st
 				fmt.Errorf("nonameax: job: unknown subcommand %q", subcommand)
 		}
 
+	case "watchdog":
+		var enable byte
+		switch strings.ToLower(subcommand) {
+		case "on", "1", "true":
+			enable = 1
+		case "off", "0", "false":
+			enable = 0
+		default:
+			return adaptix.TaskData{}, adaptix.ConsoleMessageData{},
+				fmt.Errorf("nonameax: watchdog: state must be 'on' or 'off'")
+		}
+		data := make([]byte, 6)
+		data[0] = CMD_WATCHDOG_SET
+		binary.LittleEndian.PutUint32(data[1:5], 1)
+		data[5] = enable
+		label := map[byte]string{0: "off", 1: "on"}[enable]
+		task := adaptix.TaskData{Type: taskTypeTask, Data: data, Sync: true}
+		msg := adaptix.ConsoleMessageData{
+			Status:  messageSeverityInfo,
+			Message: fmt.Sprintf("watchdog %s queued", label),
+		}
+		return task, msg, nil
+
 	case "bof-stomp":
 		switch subcommand {
 		case "sync":

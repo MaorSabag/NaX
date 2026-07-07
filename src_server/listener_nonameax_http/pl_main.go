@@ -110,11 +110,7 @@ func (a *extenderListener) Stop() error {
 }
 
 func (a *extenderListener) Edit(config string) (adaptix.ListenerData, []byte, error) {
-	listenerData, err := a.srv.edit(config)
-	if err != nil {
-		return adaptix.ListenerData{}, nil, err
-	}
-	return listenerData, []byte(config), nil
+	return a.srv.edit(config)
 }
 
 func (a *extenderListener) GetProfile() ([]byte, error) {

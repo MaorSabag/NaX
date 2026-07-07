@@ -173,7 +173,8 @@ FUNC BOOL NaxBofStompAlloc( PNAX_INSTANCE Nax, PBYTE bof, PCOF_HEADER hdr,
     if ( textIdx < 0 || textNeed == 0 )
         return FALSE;
 
-    /* Pick a slot: SmSlot (resident BOF), sync (CurrentJob==NULL), or async */
+    /* Pick a slot: SmSlot (resident BOF), sync (no job on this thread), or async */
+    NAX_JOB* curJob = NaxFindCurrentJob( Nax );
     BOF_STOMP_SLOT* slot = NULL;
     BYTE slotIdx = 0xFF;
 
@@ -183,7 +184,7 @@ FUNC BOOL NaxBofStompAlloc( PNAX_INSTANCE Nax, PBYTE bof, PCOF_HEADER hdr,
             slot = &Nax->BofStompPool.SmSlot;
             slotIdx = 0xFE;
         }
-    } else if ( Nax->CurrentJob == NULL ) {
+    } else if ( curJob == NULL ) {
         if ( Nax->BofStompPool.SyncSlot.DllBase && !Nax->BofStompPool.SyncSlot.InUse &&
              textNeed <= Nax->BofStompPool.SyncSlot.TextCap ) {
             slot = &Nax->BofStompPool.SyncSlot;
@@ -283,8 +284,8 @@ FUNC BOOL NaxBofStompAlloc( PNAX_INSTANCE Nax, PBYTE bof, PCOF_HEADER hdr,
     }
 
     slot->InUse = TRUE;
-    if ( Nax->CurrentJob )
-        Nax->CurrentJob->StompSlotIdx = slotIdx;
+    if ( curJob )
+        curJob->StompSlotIdx = slotIdx;
 
     NaxDbg( Nax, "[bof-stomp] alloc OK: .text=%p mf=%p (slot=%d, need=%u cap=%u)",
             slot->TextBase, mf, (INT)slotIdx, textNeed, slot->TextCap );
@@ -295,13 +296,14 @@ FUNC BOOL NaxBofStompAlloc( PNAX_INSTANCE Nax, PBYTE bof, PCOF_HEADER hdr,
  * .text in DLL -> PAGE_EXECUTE_READ; private sections stay PAGE_READWRITE. */
 FUNC VOID NaxBofStompProtect( PNAX_INSTANCE Nax, PVOID* mapSections, UINT16 numSections,
                                PCOF_SECTION sections ) {
+    NAX_JOB* curJob = NaxFindCurrentJob( Nax );
     BOF_STOMP_SLOT* slot = NULL;
     if ( Nax->BofStompPool.SmStompReq )
         slot = &Nax->BofStompPool.SmSlot;
-    else if ( Nax->CurrentJob == NULL )
+    else if ( curJob == NULL )
         slot = &Nax->BofStompPool.SyncSlot;
-    else if ( Nax->CurrentJob->StompSlotIdx < Nax->BofStompPool.AsyncCount )
-        slot = &Nax->BofStompPool.AsyncSlots[ Nax->CurrentJob->StompSlotIdx ];
+    else if ( curJob->StompSlotIdx < Nax->BofStompPool.AsyncCount )
+        slot = &Nax->BofStompPool.AsyncSlots[ curJob->StompSlotIdx ];
 
     if ( !slot ) return;
 
@@ -324,13 +326,14 @@ FUNC VOID NaxBofStompProtect( PNAX_INSTANCE Nax, PVOID* mapSections, UINT16 numS
  * Caller must invoke this while .text is still PAGE_READWRITE. */
 FUNC BOOL NaxBofStompPdata( PNAX_INSTANCE Nax, PRUNTIME_FUNCTION src, DWORD srcCount,
                              ULONG_PTR image_base, PVOID xdataBase, ULONG xdataSize ) {
+    NAX_JOB* curJob = NaxFindCurrentJob( Nax );
     BOF_STOMP_SLOT* slot = NULL;
     if ( Nax->BofStompPool.SmStompReq )
         slot = &Nax->BofStompPool.SmSlot;
-    else if ( Nax->CurrentJob == NULL )
+    else if ( curJob == NULL )
         slot = &Nax->BofStompPool.SyncSlot;
-    else if ( Nax->CurrentJob->StompSlotIdx < Nax->BofStompPool.AsyncCount )
-        slot = &Nax->BofStompPool.AsyncSlots[ Nax->CurrentJob->StompSlotIdx ];
+    else if ( curJob->StompSlotIdx < Nax->BofStompPool.AsyncCount )
+        slot = &Nax->BofStompPool.AsyncSlots[ curJob->StompSlotIdx ];
 
     if ( !slot || !slot->PdataBase || !slot->PdataSize )
         return FALSE;
@@ -384,13 +387,14 @@ FUNC BOOL NaxBofStompPdata( PNAX_INSTANCE Nax, PRUNTIME_FUNCTION src, DWORD srcC
 /* ========= [ free ] ========= */
 
 FUNC VOID NaxBofStompFree( PNAX_INSTANCE Nax, PVOID* mapSections, UINT16 numSections ) {
+    NAX_JOB* curJob = NaxFindCurrentJob( Nax );
     BOF_STOMP_SLOT* slot = NULL;
     if ( Nax->BofStompPool.SmStompReq )
         slot = &Nax->BofStompPool.SmSlot;
-    else if ( Nax->CurrentJob == NULL )
+    else if ( curJob == NULL )
         slot = &Nax->BofStompPool.SyncSlot;
-    else if ( Nax->CurrentJob->StompSlotIdx < Nax->BofStompPool.AsyncCount )
-        slot = &Nax->BofStompPool.AsyncSlots[ Nax->CurrentJob->StompSlotIdx ];
+    else if ( curJob->StompSlotIdx < Nax->BofStompPool.AsyncCount )
+        slot = &Nax->BofStompPool.AsyncSlots[ curJob->StompSlotIdx ];
 
     if ( !slot || !slot->InUse ) return;
 

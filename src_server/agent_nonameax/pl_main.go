@@ -51,6 +51,7 @@ const (
 	CMD_UNLINK            byte = 0x39
 	CMD_JOB_LIST          byte = 0x28
 	CMD_JOB_KILL          byte = 0x29
+	CMD_WATCHDOG_SET      byte = 0x2C
 	CMD_BOF_STOMP         byte = 0x31
 	CMD_SLEEPMASK_SET     byte = 0x32
 	CMD_SLEEPOBF_CONFIG   byte = 0x33

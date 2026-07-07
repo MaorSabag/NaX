@@ -169,6 +169,12 @@ FUNC VOID  BeaconFormatInt( formatp* format, INT value );
 FUNC VOID AxAddScreenshot( CHAR* note, CHAR* data, INT len );
 FUNC VOID AxDownloadMemory( CHAR* filename, CHAR* data, INT len );
 
+/* Key-value store */
+FUNC BOOL   BeaconAddValue( const CHAR* key, PVOID ptr );
+FUNC PVOID  BeaconGetValue( const CHAR* key );
+FUNC BOOL   BeaconRemoveValue( const CHAR* key );
+FUNC HANDLE BofGetProcessHeap( VOID );
+
 /* Async BOF APIs */
 FUNC VOID   BeaconWakeup( VOID );
 FUNC HANDLE BeaconGetStopJobEvent( VOID );

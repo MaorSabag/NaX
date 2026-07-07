@@ -65,8 +65,10 @@ function ListenerUI(mode_create)
 
     let certSelector = form.create_selector_file();
     certSelector.setPlaceholder("SSL certificate (.crt / .pem)");
+    certSelector.setEnabled(mode_create);
     let keySelector = form.create_selector_file();
     keySelector.setPlaceholder("SSL private key (.key / .pem)");
+    keySelector.setEnabled(mode_create);
 
     let sslLayout = form.create_gridlayout();
     sslLayout.addWidget(certSelector, 0, 0, 1, 3);
@@ -77,6 +79,7 @@ function ListenerUI(mode_create)
     let sslGroup = form.create_groupbox("Use SSL (HTTPS)", true);
     sslGroup.setPanel(sslPanel);
     sslGroup.setChecked(false);
+    sslGroup.setEnabled(mode_create);
 
     let netLayout = form.create_gridlayout();
     netLayout.addWidget(form.create_label("Host & Port:"), 0, 0);
@@ -90,12 +93,17 @@ function ListenerUI(mode_create)
     // ========= [ Tab 2: General ] =========
 
     let textUA        = form.create_textline("Mozilla/5.0 (Windows NT 6.2; rv:20.0) Gecko/20121202 Firefox/20.0");
+    textUA.setEnabled(mode_create);
     let textBeaconHdr = form.create_textline("X-Beacon-Id");
+    textBeaconHdr.setEnabled(mode_create);
     let comboRotation = form.create_combo(); comboRotation.addItems(["sequential","random"]);
-    let textHosts     = form.create_list(); textHosts.setButtonsEnabled(true); textHosts.addItem("192.168.77.128:8080");
+    comboRotation.setEnabled(mode_create);
+    let textHosts     = form.create_list(); textHosts.setButtonsEnabled(mode_create); textHosts.addItem("192.168.77.128:8080");
     let btnImport     = form.create_button("Import JSON");
+    btnImport.setEnabled(mode_create);
     let btnExport     = form.create_button("Export JSON");
     let textProfileJson = form.create_textmulti("");
+    textProfileJson.setEnabled(mode_create);
 
     let genLayout = form.create_gridlayout();
     genLayout.addWidget(form.create_label("User-Agent:"),  0, 0); genLayout.addWidget(textUA,        0, 1, 1, 2);
@@ -109,11 +117,12 @@ function ListenerUI(mode_create)
 
     // ========= [ Tab 3: GET ] =========
 
-    let textGetUri    = form.create_list(); textGetUri.setButtonsEnabled(true);    textGetUri.addItem("/news/feed");
-    let textGetHdrs   = form.create_list(); textGetHdrs.setButtonsEnabled(true);
-    let textGetParams = form.create_list(); textGetParams.setButtonsEnabled(true);
+    let textGetUri    = form.create_list(); textGetUri.setButtonsEnabled(mode_create);    textGetUri.addItem("/news/feed");
+    let textGetHdrs   = form.create_list(); textGetHdrs.setButtonsEnabled(mode_create);
+    let textGetParams = form.create_list(); textGetParams.setButtonsEnabled(mode_create);
     let getMetaCfg    = makeCfgRow("base64", false, "cookie", "__session");
     let getSrvCfg     = makeCfgRow("raw", false, "body", "");
+    if (!mode_create) { for (let cr of [getMetaCfg, getSrvCfg]) { cr.fmt.setEnabled(false); cr.mask.setEnabled(false); cr.place.setEnabled(false); cr.name.setEnabled(false); } }
 
     let getLayout = form.create_gridlayout();
     getLayout.addWidget(form.create_label("URIs:"),    0, 0); getLayout.addWidget(textGetUri,    0, 1, 1, 4);
@@ -126,11 +135,12 @@ function ListenerUI(mode_create)
 
     // ========= [ Tab 4: POST ] =========
 
-    let textPostUri  = form.create_list(); textPostUri.setButtonsEnabled(true);  textPostUri.addItem("/api/submit");
-    let textPostHdrs = form.create_list(); textPostHdrs.setButtonsEnabled(true);
+    let textPostUri  = form.create_list(); textPostUri.setButtonsEnabled(mode_create);  textPostUri.addItem("/api/submit");
+    let textPostHdrs = form.create_list(); textPostHdrs.setButtonsEnabled(mode_create);
     let postMetaCfg  = makeCfgRow("raw", false, "header", "X-Request-Id");
     let postOutCfg   = makeCfgRow("raw", false, "body", "");
     let postSrvCfg   = makeCfgRow("raw", false, "body", "");
+    if (!mode_create) { for (let cr of [postMetaCfg, postOutCfg, postSrvCfg]) { cr.fmt.setEnabled(false); cr.mask.setEnabled(false); cr.place.setEnabled(false); cr.name.setEnabled(false); } }
 
     let postLayout = form.create_gridlayout();
     postLayout.addWidget(form.create_label("URIs:"),    0, 0); postLayout.addWidget(textPostUri,  0, 1, 1, 4);
@@ -144,8 +154,10 @@ function ListenerUI(mode_create)
     // ========= [ Tab 5: Error ] =========
 
     let spinErrStatus = form.create_spin(); spinErrStatus.setRange(100,599); spinErrStatus.setValue(404);
+    spinErrStatus.setEnabled(mode_create);
     let textErrBody   = form.create_textmulti("<!DOCTYPE html>\n<html><body><h1>404 Not Found</h1></body></html>");
-    let textErrHdrs   = form.create_list(); textErrHdrs.setButtonsEnabled(true); textErrHdrs.addItem("Content-Type: text/html");
+    textErrBody.setEnabled(mode_create);
+    let textErrHdrs   = form.create_list(); textErrHdrs.setButtonsEnabled(mode_create); textErrHdrs.addItem("Content-Type: text/html");
 
     let errLayout = form.create_gridlayout();
     errLayout.addWidget(form.create_label("Status:"),  0, 0); errLayout.addWidget(spinErrStatus, 0, 1);
@@ -229,6 +241,10 @@ function ListenerUI(mode_create)
     tabs.addTab(errPanel,  "Error");
 
     let mainLayout = form.create_vlayout();
+    if (!mode_create) {
+        let editNotice = form.create_label("Listener editing is not available right now. Use the per-agent profile command instead.");
+        mainLayout.addWidget(editNotice);
+    }
     mainLayout.addWidget(tabs);
     let panel = form.create_panel(); panel.setLayout(mainLayout);
 

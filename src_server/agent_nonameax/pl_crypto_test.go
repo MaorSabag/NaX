@@ -6,7 +6,10 @@ import (
 	"testing"
 )
 
-// Golden vectors - generated with openssl enc -aes-128-cbc.
+// Golden vectors - generated with openssl enc -aes-128-cbc, see ADR-002.
+// All hex below was produced by running the openssl command in
+// docs/superpowers/plans/2026-05-29-phase-2a-server-side-register.md
+// Task 2a.2 Step 1 against the project's pinned key/IV/plaintext.
 var goldenKey = mustHex("000102030405060708090a0b0c0d0e0f")
 var goldenIV = mustHex("101112131415161718191a1b1c1d1e1f")
 var goldenPlain = mustHex("02000000")

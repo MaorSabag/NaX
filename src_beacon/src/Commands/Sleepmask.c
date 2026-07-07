@@ -17,7 +17,7 @@ FUNC static UINT32 NaxCountRunningJobs( PNAX_INSTANCE Nax ) {
     UINT32 count = 0;
     NAX_JOB* job = Nax->JobHead;
     while ( job ) {
-        if ( job->State == NAX_JOB_RUNNING )
+        if ( job->State == NAX_JOB_RUNNING || job->State == NAX_JOB_ABANDONED )
             count++;
         job = job->Next;
     }

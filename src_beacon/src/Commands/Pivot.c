@@ -215,9 +215,9 @@ FUNC UINT32 NaxProcessPivots( PNAX_INSTANCE Nax, PBYTE out, UINT32 out_cap ) {
     NAX_PIVOT** pp = &Nax->PivotHead;
 
     /* Bypass BeaconGate for pivot waits - the gated WaitForSingleObject
-     * routes through sleep_mask.  Pivot waits are short synchronous polls
-     * for child pipe data, not beacon sleep - they must not route through
-     * the sleepmask. */
+     * routes through sleep_mask which triggers sleep obfuscation when
+     * timeout >= threshold.  Pivot waits are short synchronous polls for
+     * child pipe data, not beacon sleep - they should not route through the sleepmask. */
     typedef DWORD (WINAPI *FN_WFSO)( HANDLE, DWORD );
     FN_WFSO realWfso = (FN_WFSO)Nax->Kernel32.WaitForSingleObject;
     for ( UINT32 i = 0; i < Nax->GateSwaps.Count; i++ ) {

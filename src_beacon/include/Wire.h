@@ -34,6 +34,7 @@
 #define NAX_CMD_RM           0x27u
 #define NAX_CMD_SAVEMEMORY   0x2Au
 #define NAX_CMD_CHUNKSIZE    0x2Bu
+#define NAX_CMD_WATCHDOG_SET 0x2Cu
 
 /* ========= [ download sub-commands ] ========= */
 #define NAX_DL_START         0x01u

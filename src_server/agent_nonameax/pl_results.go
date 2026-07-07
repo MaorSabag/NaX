@@ -655,6 +655,8 @@ func (ext *ExtenderAgent) ProcessData(agentData adaptix.AgentData, decryptedData
 						stateStr = "finished"
 					case 3:
 						stateStr = "killed"
+					case 4:
+						stateStr = "abandoned"
 					}
 					lines = append(lines, fmt.Sprintf(" %08x    %-10s  %ds", tid, stateStr, elapsed))
 					off += 9
@@ -667,6 +669,14 @@ func (ext *ExtenderAgent) ProcessData(agentData adaptix.AgentData, decryptedData
 					displayText = "Job kill signal sent"
 				} else {
 					displayText = "Job not found"
+				}
+
+			case cmdId == CMD_WATCHDOG_SET:
+				if status == STATUS_OK && len(data) >= 1 {
+					state := map[byte]string{0: "off", 1: "on"}[data[0]]
+					displayText = fmt.Sprintf("watchdog %s", state)
+				} else {
+					displayText = "watchdog: command failed"
 				}
 
 			case cmdId == CMD_SLEEPOBF_CONFIG:

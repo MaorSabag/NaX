@@ -54,7 +54,8 @@
 #define H_NTQUERYSYSTEMINFORMATION 0x37072D8Au  /* NtQuerySystemInformation */
 #define H_NTQUERYVIRTUALMEMORY     0x315E365Fu  /* NtQueryVirtualMemory */
 #define H_NTOPENPROCESS        0x3ED17B38u  /* NtOpenProcess */
-#define H_NTTERMINATEPROCESS   0xB931F2E7u  /* NtTerminateProcess */
+#define H_NTTERMINATEPROCESS       0xB931F2E7u  /* NtTerminateProcess */
+#define H_NTSETINFORMATIONPROCESS  0x81BADCAAu  /* NtSetInformationProcess */
 
 /* kernel32.dll exports */
 #define H_GETCURRENTPROCESSID  0xC36D7CE0u

@@ -180,6 +180,7 @@ FUNC PNAX_INSTANCE NaxBootstrap( VOID ) {
     Nax->Ntdll.NtOpenProcessToken        = (PVOID)NaxGetProc( hNtdll, H_NTOPENPROCESSTOKEN );
     Nax->Ntdll.NtQueryInformationToken   = (PVOID)NaxGetProc( hNtdll, H_NTQUERYINFORMATIONTOKEN );
     Nax->Ntdll.NtQueryInformationProcess = (PVOID)NaxGetProc( hNtdll, H_NTQUERYINFORMATIONPROCESS );
+    Nax->Ntdll.NtSetInformationProcess   = (PVOID)NaxGetProc( hNtdll, H_NTSETINFORMATIONPROCESS );
     Nax->Ntdll.NtClose                   = (PVOID)NaxGetProc( hNtdll, H_NTCLOSE );
     Nax->Ntdll.NtQuerySystemInformation  = (PVOID)NaxGetProc( hNtdll, H_NTQUERYSYSTEMINFORMATION );
     Nax->Ntdll.NtQueryVirtualMemory      = (PVOID)NaxGetProc( hNtdll, H_NTQUERYVIRTUALMEMORY );

@@ -544,18 +544,20 @@ FUNC INT NaxBofExecute( PNAX_INSTANCE Nax,
     NaxDbg( Nax, "[bof] entry OK: %p", entry );
 
     /* Record stomp metadata for operator feedback */
-    Nax->BofCtx.Stomped  = stomped ? 0x01 : 0x00;
-    Nax->BofCtx.StompSlot = stomped ? ( Nax->CurrentJob ? Nax->CurrentJob->StompSlotIdx : 0xFF ) : 0x00;
+    NAX_JOB* curJob = NaxFindCurrentJob( Nax );
+    NAX_BOF_CTX* stompCtx = curJob ? &curJob->BofCtx : &Nax->BofCtx;
+    stompCtx->Stomped   = stomped ? 0x01 : 0x00;
+    stompCtx->StompSlot = stomped ? ( curJob ? curJob->StompSlotIdx : 0xFF ) : 0x00;
 
     /* ---- 5. execute BOF ---- */
     if ( stomped && Nax->CfgEnabled ) {
         BOF_STOMP_SLOT* cfgSlot = NULL;
         if ( Nax->BofStompPool.SmStompReq )
             cfgSlot = &Nax->BofStompPool.SmSlot;
-        else if ( Nax->CurrentJob == NULL )
+        else if ( curJob == NULL )
             cfgSlot = &Nax->BofStompPool.SyncSlot;
-        else if ( Nax->CurrentJob->StompSlotIdx < Nax->BofStompPool.AsyncCount )
-            cfgSlot = &Nax->BofStompPool.AsyncSlots[ Nax->CurrentJob->StompSlotIdx ];
+        else if ( curJob->StompSlotIdx < Nax->BofStompPool.AsyncCount )
+            cfgSlot = &Nax->BofStompPool.AsyncSlots[ curJob->StompSlotIdx ];
         if ( cfgSlot )
             NaxCfgAddTarget( Nax, cfgSlot->DllBase, entry );
     }

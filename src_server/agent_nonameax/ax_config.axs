@@ -291,6 +291,12 @@ function GenerateUI(listeners_type)
 
 function RegisterCommands(listenerType)
 {
+    // ---- watchdog (enable/disable job timeout) ----
+    let cmd_watchdog_on  = ax.create_command("on",  "Enable watchdog (BOF timeout enforcement)", "watchdog on",  "Enabling watchdog...");
+    let cmd_watchdog_off = ax.create_command("off", "Disable watchdog (BOFs run without timeout)", "watchdog off", "Disabling watchdog...");
+    let cmd_watchdog = ax.create_command("watchdog", "Enable or disable the async BOF watchdog");
+    cmd_watchdog.addSubCommands([cmd_watchdog_on, cmd_watchdog_off]);
+
     // ---- whoami ----
     let cmd_whoami = ax.create_command(
         "whoami",
@@ -536,7 +542,7 @@ function RegisterCommands(listenerType)
         cmd_token,
         cmd_download, cmd_upload, cmd_bof,
         cmd_execute,
-        cmd_job,
+        cmd_job, cmd_watchdog,
         cmd_chunksize,
         cmd_profile,
         cmd_bof_stomp,

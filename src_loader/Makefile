@@ -29,7 +29,7 @@ MAKEFLAGS += -s
 ##
 CC_X64   := x86_64-w64-mingw32-g++
 NASM     := nasm
-OBJCOPY  := objcopy
+OBJCOPY   ?= $(shell which x86_64-w64-mingw32-objcopy 2>/dev/null || echo objcopy)
 
 ##
 ## Technique selection (overridable from parent Makefile)

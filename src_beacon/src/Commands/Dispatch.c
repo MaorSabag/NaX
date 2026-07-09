@@ -84,6 +84,18 @@ FUNC INT NaxDispatch( PNAX_INSTANCE    Nax,
                              ? NAX_STATUS_OK : NAX_STATUS_ERR;
         return 1;
 
+    /* ---- CMD_CP (0x1A) ---- */
+    case NAX_CMD_CP:
+        *result_status = ( CmdCp( Nax, task->Args, (UINT32)task->ArgsLen, result_data, result_data_len ) == NAX_OK )
+                             ? NAX_STATUS_OK : NAX_STATUS_ERR;
+        return 1;
+
+    /* ---- CMD_MV (0x1B) ---- */
+    case NAX_CMD_MV:
+        *result_status = ( CmdMv( Nax, task->Args, (UINT32)task->ArgsLen, result_data, result_data_len ) == NAX_OK )
+                             ? NAX_STATUS_OK : NAX_STATUS_ERR;
+        return 1;
+
     /* ---- CMD_BOF (0x20) ---- */
     case NAX_CMD_BOF: {
         INT bof_rc = NaxCmdBof( Nax, task->TaskId, task->Args, (UINT32)task->ArgsLen, result_data, result_data_len );

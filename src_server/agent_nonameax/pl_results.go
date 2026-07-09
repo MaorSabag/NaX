@@ -429,8 +429,43 @@ func (ext *ExtenderAgent) ProcessData(agentData adaptix.AgentData, decryptedData
 				newSz := binary.LittleEndian.Uint32(data[0:4])
 				displayText = fmt.Sprintf("Download chunk size set to %s", humanSize(int(newSz)))
 
+			case status == STATUS_OK && cmdId == CMD_CD:
+				displayText = "Working directory changed"
+
+			case status == STATUS_OK && cmdId == CMD_PWD:
+				displayText = string(data)
+
+			case status == STATUS_OK && cmdId == CMD_MKDIR:
+				displayText = "Directory created"
+
+			case status == STATUS_OK && cmdId == CMD_RMDIR:
+				displayText = "Directory removed"
+
+			case status == STATUS_OK && cmdId == CMD_CAT:
+				displayText = "File contents"
+				clearText = string(data)
+
 			case status == STATUS_OK && cmdId == CMD_RM:
 				displayText = "File deleted"
+
+			case status == STATUS_OK && cmdId == CMD_CP:
+				displayText = "File copied"
+
+			case status == STATUS_OK && cmdId == CMD_MV:
+				displayText = "File moved"
+
+			case status == STATUS_OK && cmdId == CMD_BOF_STOMP:
+				displayText = string(data)
+
+			case status == STATUS_OK && cmdId == CMD_SLEEPMASK_SET:
+				displayText = "Sleepmask installed"
+
+			case status == STATUS_OK && cmdId == CMD_DLL_NOTIFY_LIST:
+				displayText = "DLL notifications"
+				clearText = string(data)
+
+			case status == STATUS_OK && cmdId == CMD_DLL_NOTIFY_REMOVE:
+				displayText = string(data)
 
 			case cmdId == CMD_PROFILE:
 				pendingProfiles.Delete(agentData.Id)

@@ -35,6 +35,8 @@ const (
 	CMD_RMDIR             byte = 0x17
 	CMD_CAT               byte = 0x18
 	CMD_LS                byte = 0x19
+	CMD_CP                byte = 0x1A
+	CMD_MV                byte = 0x1B
 	CMD_BOF               byte = 0x20
 	CMD_SCREENSHOT        byte = 0x21
 	CMD_DOWNLOAD          byte = 0x22

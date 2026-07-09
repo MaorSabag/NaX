@@ -74,6 +74,8 @@
 #define H_READFILE             0xBC5C02C3u  /* ReadFile */
 #define H_WRITEFILE            0xD6BC7FEAu  /* WriteFile */
 #define H_DELETEFILEA          0x3E6F4637u  /* DeleteFileA */
+#define H_COPYFILEA            0xC7C10569u  /* CopyFileA */
+#define H_MOVEFILEEXA          0x59632232u  /* MoveFileExA */
 #define H_CLOSEHANDLE          0x00FEF545u  /* CloseHandle */
 #define H_REMOVEDIRECTORYA     0x192454D3u  /* RemoveDirectoryA */
 #define H_FINDFIRSTFILEA       0xBDC52C95u  /* FindFirstFileA */

@@ -349,6 +349,14 @@ function RegisterCommands(listenerType)
     cmd_rm.addArgBool("-rf", "Recursive force delete (remove read-only files, recurse into directories)");
     cmd_rm.addArgString("path", true, "File or directory path to delete");
 
+    let cmd_cp = ax.create_command("cp", "Copy a file", "cp {src} {dst}", "Queuing cp...");
+    cmd_cp.addArgString("src", true, "Source file path");
+    cmd_cp.addArgString("dst", true, "Destination file path");
+
+    let cmd_mv = ax.create_command("mv", "Move or rename a file", "mv {src} {dst}", "Queuing mv...");
+    cmd_mv.addArgString("src", true, "Source file path");
+    cmd_mv.addArgString("dst", true, "Destination file path");
+
     // ---- download ----
     let cmd_download = ax.create_command("download", "Download a file from the agent machine", "download {path} {chunk_size}", "Queuing download...");
     cmd_download.addArgString("path", true, "Absolute path of the file to download");
@@ -541,7 +549,7 @@ function RegisterCommands(listenerType)
     let group = ax.create_commands_group("NoNameAx", [
         // cmd_whoami,
         cmd_sleep,
-        cmd_cd, cmd_pwd, cmd_mkdir, cmd_rmdir, cmd_rm, cmd_cat, cmd_ls, cmd_ps,
+        cmd_cd, cmd_pwd, cmd_mkdir, cmd_rmdir, cmd_rm, cmd_cp, cmd_mv, cmd_cat, cmd_ls, cmd_ps,
         cmd_token,
         cmd_download, cmd_upload, cmd_bof,
         cmd_execute,

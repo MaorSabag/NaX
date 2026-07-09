@@ -220,6 +220,8 @@ FUNC PNAX_INSTANCE NaxBootstrap( VOID ) {
     Nax->Kernel32.ReadFile                        = (PVOID)NaxGetProc( hK32, H_READFILE );
     Nax->Kernel32.WriteFile                       = (PVOID)NaxGetProc( hK32, H_WRITEFILE );
     Nax->Kernel32.DeleteFileA                     = (PVOID)NaxGetProc( hK32, H_DELETEFILEA );
+    Nax->Kernel32.CopyFileA                       = (PVOID)NaxGetProc( hK32, H_COPYFILEA );
+    Nax->Kernel32.MoveFileExA                     = (PVOID)NaxGetProc( hK32, H_MOVEFILEEXA );
     Nax->Kernel32.CloseHandle                     = (PVOID)NaxGetProc( hK32, H_CLOSEHANDLE );
     Nax->Kernel32.RemoveDirectoryA                = (PVOID)NaxGetProc( hK32, H_REMOVEDIRECTORYA );
     Nax->Kernel32.HeapCreate                     = (PVOID)NaxGetProc( hK32, H_HEAPCREATE );

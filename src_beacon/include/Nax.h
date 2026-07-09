@@ -155,6 +155,8 @@ FUNC INT CmdRmdir( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE o
 FUNC INT CmdCat( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
 FUNC INT CmdLs( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
 FUNC INT CmdRm( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
+FUNC INT CmdCp( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
+FUNC INT CmdMv( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
 FUNC INT NaxCmdBof( PNAX_INSTANCE Nax, UINT32 taskId, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
 FUNC INT NaxCmdScreenshot( PNAX_INSTANCE Nax, PBYTE out, UINT32* out_len );
 FUNC INT NaxCmdDownload( PNAX_INSTANCE Nax, UINT32 taskId, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );

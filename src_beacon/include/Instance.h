@@ -160,6 +160,8 @@ typedef struct {
     D_API( ReadFile );
     D_API( WriteFile );
     D_API( DeleteFileA );
+    D_API( CopyFileA );
+    D_API( MoveFileExA );
     D_API( CloseHandle );
     D_API( RemoveDirectoryA );
     D_API( FindFirstFileA );

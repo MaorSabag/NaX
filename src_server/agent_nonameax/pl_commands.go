@@ -31,6 +31,22 @@ func buildPathCmd(cmdId byte, cmdName string, path string) ([]byte, error) {
 	return data, nil
 }
 
+func buildTwoPathCmd(cmdId byte, cmdName string, src string, dst string) ([]byte, error) {
+	srcBytes := []byte(src)
+	dstBytes := []byte(dst)
+	if len(srcBytes) > maxPathBytes || len(dstBytes) > maxPathBytes {
+		return nil, fmt.Errorf("nonameax: %s: path too long (max %d bytes)", cmdName, maxPathBytes)
+	}
+	argsLen := len(srcBytes) + 1 + len(dstBytes)
+	data := make([]byte, 5+argsLen)
+	data[0] = cmdId
+	binary.LittleEndian.PutUint32(data[1:5], uint32(argsLen))
+	copy(data[5:], srcBytes)
+	data[5+len(srcBytes)] = 0x00
+	copy(data[5+len(srcBytes)+1:], dstBytes)
+	return data, nil
+}
+
 func buildPathCmdFlags(cmdId byte, cmdName string, path string, recursive bool) ([]byte, error) {
 	pathBytes := []byte(path)
 	if len(pathBytes) > maxPathBytes {
@@ -218,6 +234,36 @@ func (ext *ExtenderAgent) CreateCommand(agentData adaptix.AgentData, args map[st
 		}
 		task := adaptix.TaskData{Type: taskTypeTask, Data: data, Sync: true}
 		msg := adaptix.ConsoleMessageData{Status: messageSeverityInfo, Message: label}
+		return task, msg, nil
+
+	case "cp":
+		src, _ := args["src"].(string)
+		dst, _ := args["dst"].(string)
+		if src == "" || dst == "" {
+			return adaptix.TaskData{}, adaptix.ConsoleMessageData{},
+				errors.New("nonameax: cp: 'src' and 'dst' arguments required")
+		}
+		data, err := buildTwoPathCmd(CMD_CP, "cp", src, dst)
+		if err != nil {
+			return adaptix.TaskData{}, adaptix.ConsoleMessageData{}, err
+		}
+		task := adaptix.TaskData{Type: taskTypeTask, Data: data, Sync: true}
+		msg := adaptix.ConsoleMessageData{Status: messageSeverityInfo, Message: fmt.Sprintf("cp %s -> %s queued", src, dst)}
+		return task, msg, nil
+
+	case "mv":
+		src, _ := args["src"].(string)
+		dst, _ := args["dst"].(string)
+		if src == "" || dst == "" {
+			return adaptix.TaskData{}, adaptix.ConsoleMessageData{},
+				errors.New("nonameax: mv: 'src' and 'dst' arguments required")
+		}
+		data, err := buildTwoPathCmd(CMD_MV, "mv", src, dst)
+		if err != nil {
+			return adaptix.TaskData{}, adaptix.ConsoleMessageData{}, err
+		}
+		task := adaptix.TaskData{Type: taskTypeTask, Data: data, Sync: true}
+		msg := adaptix.ConsoleMessageData{Status: messageSeverityInfo, Message: fmt.Sprintf("mv %s -> %s queued", src, dst)}
 		return task, msg, nil
 
 	case "cat":

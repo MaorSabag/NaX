@@ -321,6 +321,8 @@ FUNC INT NaxDecodeProfile( const PBYTE data, UINT32 data_len, PNAX_INSTANCE Nax 
         Nax->Config.PostClientOutput.EmptyRespLen     = 0;
     }
 
+    /* Reset rotation indices */
+    Nax->Config.HostIdx       = 0;
     Nax->Config.GetUriIdx     = 0;
     Nax->Config.PostUriIdx    = 0;
     Nax->Config.ProfileLoaded = 1;

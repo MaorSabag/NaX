@@ -64,6 +64,7 @@ typedef struct {
 
     /* callback hosts */
     BYTE   HostCount;
+    BYTE   HostIdx;
     CHAR   Hosts[ 4 ][ 128 ];
     CHAR   UserAgent[ 256 ];
 

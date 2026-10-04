@@ -74,7 +74,8 @@ endif
 LOADER_DEFINES := NAX_STOMP_MODE=$(NAX_STOMP_MODE) NAX_EXEC_MODE=$(NAX_EXEC_MODE) NAX_STOMP_ADVANCED=$(NAX_STOMP_ADVANCED)
 
 .PHONY: all debug link debug-link loader beacon sleepmask debug-sleepmask clean \
-        _sync-loader _sync-beacon _sync-beacon-debug
+        _sync-loader _sync-beacon _sync-beacon-debug \
+        install-hooks sync-diff leak-check
 
 ## ========= [ combined output ] =========
 
@@ -186,6 +187,52 @@ link-components: _sync-loader
 debug-link-components: _sync-loader
 	$(MAKE) -j$(JOBS) -C src_beacon debug-link $(BEACON_TRANSPORT)
 	@echo "[+] debug-link components ready"
+
+## ========= [ sync tooling ] =========
+
+PRIVATE_ROOT ?= /opt/post-exploitation/NoNameAx/NaX
+
+SYNC_DIRS    := src_beacon src_server src_loader profiles scripts wiki
+SYNC_EXCLUDE := --exclude='Config.h' --exclude='Config_sleepmask.h' \
+                --exclude='*.o' --exclude='*.d' --exclude='*.so' \
+                --exclude='*.obj' --exclude='*.bin' --exclude='*.exe' \
+                --exclude='*.text_rva' --exclude='*.pdata.bin' --exclude='*.xdata.bin' \
+                --exclude='graphify-out' --exclude='agent' --exclude='listener_http'
+
+install-hooks:
+	git config core.hooksPath .githooks
+	chmod +x .githooks/*
+	@echo "[+] hooks installed (core.hooksPath = .githooks)"
+
+sync-diff:
+	@echo "=== Sync diff: $(PRIVATE_ROOT) → $(CURDIR) ==="
+	@for d in $(SYNC_DIRS); do \
+	    if [ -d "$(PRIVATE_ROOT)/$$d" ] && [ -d "$$d" ]; then \
+	        echo ""; echo "--- $$d ---"; \
+	        diff -rq "$(PRIVATE_ROOT)/$$d" "$$d" $(SYNC_EXCLUDE) 2>/dev/null | sort || true; \
+	    elif [ -d "$(PRIVATE_ROOT)/$$d" ]; then \
+	        echo ""; echo "--- $$d --- (exists in private only)"; \
+	    fi; \
+	done
+	@echo ""; echo "--- root files ---"
+	@for f in Makefile setup_nax.sh README.md; do \
+	    diff -q "$(PRIVATE_ROOT)/$$f" "$$f" 2>/dev/null || true; \
+	done
+	@echo ""; echo "=== done ==="
+
+leak-check:
+	@if [ -f .sync-forbidden ]; then \
+	    TOKENS=$$(grep -vE '^\s*(#|$$)' .sync-forbidden | grep -v '^file:' | grep -v '^path:' | paste -sd'|'); \
+	    if [ -n "$$TOKENS" ]; then \
+	        FOUND=$$(git diff --cached -U0 -- ':!.sync-forbidden' 2>/dev/null | grep -inE "$$TOKENS" || true); \
+	        if [ -n "$$FOUND" ]; then \
+	            echo "LEAK DETECTED in staged diff:"; echo "$$FOUND"; exit 1; \
+	        fi; \
+	    fi; \
+	    echo "Clean — no forbidden tokens in staged diff"; \
+	else \
+	    echo "No .sync-forbidden file found"; \
+	fi
 
 ## ========= [ clean ] =========
 

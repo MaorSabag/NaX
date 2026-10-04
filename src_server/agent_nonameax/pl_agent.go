@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 
-	adaptix "github.com/Adaptix-Framework/axc2"
+	adaptix "github.com/Adaptix-Framework/axc2/v2"
+	"nonameax/naxwire"
 )
 
 // cachedAgentIdentity holds the identity fields persisted via TsExtenderData
@@ -84,12 +86,12 @@ func saveCacheEntry(beaconID string, ad adaptix.AgentData) {
 // --- Pivot persistence ---
 
 type cachedPivot struct {
-	ParentAgentId string
-	ChildAgentId  string
+	ParentAgentId int64
+	ChildAgentId  int64
 }
 
-func clearChildMark(childAgentId string) {
-	if Ts == nil || childAgentId == "" {
+func clearChildMark(childAgentId int64) {
+	if Ts == nil || childAgentId == 0 {
 		return
 	}
 	emptyMark := ""
@@ -98,7 +100,7 @@ func clearChildMark(childAgentId string) {
 	}{Mark: &emptyMark})
 }
 
-func savePivotToStore(pivotId, parentAgentId, childAgentId string) {
+func savePivotToStore(pivotId string, parentAgentId int64, childAgentId int64) {
 	if Ts == nil {
 		return
 	}
@@ -116,7 +118,7 @@ func deletePivotFromStore(pivotId string) {
 	_ = Ts.TsExtenderDataDelete(extenderNamePivots, pivotId)
 }
 
-func deleteAgentPivotsFromStore(agentId string) {
+func deleteAgentPivotsFromStore(agentId int64) {
 	if Ts == nil {
 		return
 	}
@@ -145,17 +147,24 @@ func registerCleanupHooks() {
 	if Ts == nil {
 		return
 	}
-	Ts.TsEventHookOnPost("agent.terminate", "nax_cleanup_agent", func(data any) error {
-		agentId, ok := data.(string)
+	Ts.TsEventHookRegister("agent.terminate", "nax_cleanup_agent", 1, 0, func(data any) error {
+		agentId, ok := data.(int64)
 		if !ok {
 			return nil
 		}
-		agentIdentityCache.Delete(agentId)
-		_ = Ts.TsExtenderDataDelete(extenderNameAgents, agentId)
-		_ = Ts.TsExtenderDataDelete(extenderNameProfiles, agentId)
+		beaconID := ""
+		if raw, found := agentIdToBeaconId.LoadAndDelete(agentId); found {
+			beaconID = raw.(string)
+		}
+		if beaconID != "" {
+			agentIdentityCache.Delete(beaconID)
+			_ = Ts.TsExtenderDataDelete(extenderNameAgents, beaconID)
+		}
+		agentIdStr := strconv.FormatInt(agentId, 10)
+		_ = Ts.TsExtenderDataDelete(extenderNameProfiles, agentIdStr)
 		deleteAgentPivotsFromStore(agentId)
 		pendingProfiles.Delete(agentId)
-		naxLogInfo("agent.terminate cleanup: %s", agentId)
+		naxLogInfo("agent.terminate cleanup: %d", agentId)
 		return nil
 	})
 }
@@ -163,10 +172,10 @@ func registerCleanupHooks() {
 // CreateAgent decodes the first beacon body and returns a populated AgentData.
 //
 // The listener prepends the 16-char hex beaconID (from X-Beacon-Id) to the
-// wire frame before calling TsAgentCreate, so that we can set AgentData.Id
-// to that same ID.  Adaptix uses AgentData.Id as the session lookup key for
-// TsAgentIsExists / TsAgentProcessData / TsAgentGetHostedAll - it must match
-// the ID the listener passes to those calls (i.e. the beaconID).
+// wire frame before calling TsAgentCreate, so that we can set AgentData.UID
+// to that same ID.  Adaptix uses AgentData.Id (server-assigned int64) as the
+// session lookup key for TsAgentIsExists / TsAgentProcessData /
+// TsAgentGetHostedAll.
 //
 // CreateAgent is invoked both for the genuine first contact (REGISTER frame
 // from a fresh implant) AND when the listener has to re-register an agent
@@ -174,9 +183,9 @@ func registerCleanupHooks() {
 // the deletion, so it keeps sending HEARTBEAT). For the HEARTBEAT case we
 // fall back to placeholder values - the implant's identity is unknown until
 // it sends another REGISTER on its own (e.g. after restart).
-func (p *PluginAgent) CreateAgent(beat []byte) (adaptix.AgentData, adaptix.ExtenderAgent, error) {
+func (p *PluginAgent) CreateAgent(beat []byte) (adaptix.AgentData, adaptix.AgentFunctions, error) {
 	if len(beat) < 32 {
-		return adaptix.AgentData{}, nil, errors.New("nonameax: CreateAgent: beat too short (need ≥32 bytes: 16 beaconID + 16 AES key)")
+		return adaptix.AgentData{}, adaptix.AgentFunctions{}, errors.New("nonameax: CreateAgent: beat too short (need >=32 bytes: 16 beaconID + 16 AES key)")
 	}
 	beaconID := string(beat[:16])
 	aesKey := make([]byte, 16)
@@ -184,48 +193,48 @@ func (p *PluginAgent) CreateAgent(beat []byte) (adaptix.AgentData, adaptix.Exten
 	frameData := beat[32:]
 
 	ad := adaptix.AgentData{
-		Id:         beaconID,
+		UID:        []byte(beaconID),
 		Os:         adaptix.OS_WINDOWS,
 		SessionKey: aesKey,
 	}
 
 	naxLogInfo("CreateAgent: beaconID=%s keyPrefix=%x frameDataLen=%d first16=%x", beaconID, aesKey[:4], len(frameData), frameData[:min(16, len(frameData))])
-	decrypted, err := DecryptCBC(aesKey, frameData)
+	decrypted, err := naxwire.DecryptCBC(aesKey, frameData)
 	if err != nil {
 		naxLogErr("CreateAgent: decrypt FAILED beaconID=%s keyPrefix=%x frameDataLen=%d: %v", beaconID, aesKey[:4], len(frameData), err)
-		return ad, &ExtenderAgent{}, nil
+		return ad, buildAgentFunctions(), nil
 	}
 	frameData = decrypted
-	msgType, _, body, err := DecodeFrame(frameData)
+	msgType, _, body, err := naxwire.DecodeFrame(frameData)
 	if err != nil {
 		naxLogErr("CreateAgent: DecodeFrame failed: %v (frameData len=%d)", err, len(frameData))
-		return ad, &ExtenderAgent{}, nil
+		return ad, buildAgentFunctions(), nil
 	}
 	naxLogInfo("CreateAgent: frame type=0x%02x bodyLen=%d", msgType, len(body))
 
-	if msgType != WireTypeRegister {
+	if msgType != naxwire.WireTypeRegister {
 		if cached, ok := agentIdentityCache.Load(beaconID); ok {
 			cachedAd := cached.(adaptix.AgentData)
-			ad.Computer = cachedAd.Computer
-			ad.Username = cachedAd.Username
-			ad.Pid = cachedAd.Pid
-			ad.Tid = cachedAd.Tid
-			ad.Arch = cachedAd.Arch
-			ad.Sleep = cachedAd.Sleep
+			ad.Computer   = cachedAd.Computer
+			ad.Username   = cachedAd.Username
+			ad.Pid        = cachedAd.Pid
+			ad.Tid        = cachedAd.Tid
+			ad.Arch       = cachedAd.Arch
+			ad.Sleep      = cachedAd.Sleep
 			ad.InternalIP = cachedAd.InternalIP
-			ad.Domain = cachedAd.Domain
-			ad.Process = cachedAd.Process
-			ad.Elevated = cachedAd.Elevated
-			ad.ACP = cachedAd.ACP
-			ad.OemCP = cachedAd.OemCP
-			ad.OsDesc = cachedAd.OsDesc
+			ad.Domain     = cachedAd.Domain
+			ad.Process    = cachedAd.Process
+			ad.Elevated   = cachedAd.Elevated
+			ad.ACP        = cachedAd.ACP
+			ad.OemCP      = cachedAd.OemCP
+			ad.OsDesc     = cachedAd.OsDesc
 		}
-		return ad, &ExtenderAgent{}, nil
+		return ad, buildAgentFunctions(), nil
 	}
 
-	reg, err := DecodeRegister(body)
+	reg, err := naxwire.DecodeRegister(body)
 	if err != nil {
-		return adaptix.AgentData{}, nil, err
+		return adaptix.AgentData{}, adaptix.AgentFunctions{}, err
 	}
 
 	archStr := "x64"
@@ -233,19 +242,19 @@ func (p *PluginAgent) CreateAgent(beat []byte) (adaptix.AgentData, adaptix.Exten
 		archStr = "x86"
 	}
 
-	ad.Computer = reg.Hostname
-	ad.Username = reg.Username
-	ad.Pid = fmt.Sprintf("%d", reg.Pid)
-	ad.Tid = fmt.Sprintf("%d", reg.Tid)
-	ad.Arch = archStr
-	ad.Sleep = uint(reg.SleepMs / 1000)
+	ad.Computer   = reg.Hostname
+	ad.Username   = reg.Username
+	ad.Pid        = fmt.Sprintf("%d", reg.Pid)
+	ad.Tid        = fmt.Sprintf("%d", reg.Tid)
+	ad.Arch       = archStr
+	ad.Sleep      = uint(reg.SleepMs / 1000)
 	ad.InternalIP = reg.Ip
-	ad.Domain = reg.Domain
-	ad.Process = reg.ProcessName
-	ad.Elevated = reg.Elevated != 0
-	ad.ACP = int(reg.Acp)
-	ad.OemCP = int(reg.OemCp)
-	ad.OsDesc = naxOsVersion(reg.OsMajor, reg.OsMinor, reg.OsBuild, archStr)
+	ad.Domain     = reg.Domain
+	ad.Process    = reg.ProcessName
+	ad.Elevated   = reg.Elevated != 0
+	ad.ACP        = int(reg.Acp)
+	ad.OemCP      = int(reg.OemCp)
+	ad.OsDesc     = naxOsVersion(reg.OsMajor, reg.OsMinor, reg.OsBuild, archStr)
 
 	naxLogOk("CreateAgent: beaconID=%s host=%s user=%s pid=%d tid=%d arch=%s ip=%s domain=%s proc=%s elevated=%v os=%s acp=%d oemcp=%d ppid=%d img=%s",
 		beaconID, reg.Hostname, reg.Username, reg.Pid, reg.Tid, archStr, reg.Ip, reg.Domain, reg.ProcessName, ad.Elevated, ad.OsDesc, reg.Acp, reg.OemCp, reg.ParentPid, reg.ImgPath)
@@ -253,5 +262,5 @@ func (p *PluginAgent) CreateAgent(beat []byte) (adaptix.AgentData, adaptix.Exten
 	agentIdentityCache.Store(beaconID, ad)
 	saveCacheEntry(beaconID, ad)
 
-	return ad, &ExtenderAgent{}, nil
+	return ad, buildAgentFunctions(), nil
 }

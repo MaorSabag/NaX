@@ -1,6 +1,5 @@
 # Makefile - listener_nonameax_smb extender plugin
 
-GOEXPERIMENT := jsonv2,greenteagc
 DEPLOY_DIR   := ../../../Server/extenders/listener_nonameax_smb
 OUT          := $(DEPLOY_DIR)/listener_nonameax_smb.so
 
@@ -10,7 +9,7 @@ all: $(OUT)
 
 $(OUT): *.go
 	@mkdir -p $(DEPLOY_DIR)
-	GOEXPERIMENT=$(GOEXPERIMENT) go build -buildmode=plugin -o $(OUT) .
+	go build -buildmode=plugin -o $(OUT) .
 	@cp config.yaml ax_config.axs $(DEPLOY_DIR)/
 	@echo "  DEPLOY  $(OUT)"
 

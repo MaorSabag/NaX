@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"nonameax/naxwire"
 )
 
 func TestGenerateConfigH(t *testing.T) {
@@ -185,7 +187,7 @@ func TestGenerateConfigH_ProfileFromListenerConfig(t *testing.T) {
 		t.Errorf("expected 2 GET URIs, got %d", len(p.Get.URIs))
 	}
 
-	profileBytes := EncodeProfileBodyV2(p)
+	profileBytes := naxwire.EncodeProfileBodyV2(p)
 	if len(profileBytes) == 0 {
 		t.Fatal("EncodeProfileBodyV2 returned empty bytes")
 	}

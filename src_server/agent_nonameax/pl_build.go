@@ -273,7 +273,7 @@ func generateShellcodeH(blob []byte) []byte {
 	return buf.Bytes()
 }
 
-func compileWrapper(pic []byte, format, svcName, dllExport string, debug bool, logFn func(int, string, ...any)) ([]byte, string, error) {
+func compileWrapper(pic []byte, format, svcName, dllExport string, debug bool, builderId string, logFn func(int, string, ...any)) ([]byte, string, error) {
 	tmpDir, err := os.MkdirTemp("", "nax_pe_wrap_")
 	if err != nil {
 		return nil, "", fmt.Errorf("create temp dir: %w", err)
@@ -348,10 +348,16 @@ func compileWrapper(pic []byte, format, svcName, dllExport string, debug bool, l
 		logFn(1, "PE wrapper: %s %s → %s", compiler, format, outName)
 	}
 
-	cmd := exec.Command(compiler, args...)
-	cmdOut, cmdErr := cmd.CombinedOutput()
-	if cmdErr != nil {
-		return nil, "", fmt.Errorf("%s failed: %v\n%s", compiler, cmdErr, string(cmdOut))
+	if Ts != nil && builderId != "" {
+		if err := Ts.TsAgentBuildExecute(builderId, tmpDir, nil, compiler, args...); err != nil {
+			return nil, "", fmt.Errorf("%s failed: %v", compiler, err)
+		}
+	} else {
+		cmd := exec.Command(compiler, args...)
+		cmdOut, cmdErr := cmd.CombinedOutput()
+		if cmdErr != nil {
+			return nil, "", fmt.Errorf("%s failed: %v\n%s", compiler, cmdErr, string(cmdOut))
+		}
 	}
 
 	peBytes, err := os.ReadFile(outPath)

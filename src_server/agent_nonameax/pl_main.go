@@ -4,11 +4,11 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math/rand"
-	"strconv"
 	"strings"
 	"sync"
 
-	adaptix "github.com/Adaptix-Framework/axc2"
+	adaptix "github.com/Adaptix-Framework/axc2/v2"
+	"nonameax/naxwire"
 )
 
 // Ts callback constants - match Adaptix SDK values.
@@ -19,9 +19,31 @@ const (
 	messageSeveritySuccess = adaptix.MESSAGE_SUCCESS // green success
 )
 
-func naxLogInfo(format string, args ...any) { fmt.Printf("[NoNameAx] [*] "+format+"\n", args...) }
-func naxLogOk(format string, args ...any)   { fmt.Printf("[NoNameAx] [+] "+format+"\n", args...) }
-func naxLogErr(format string, args ...any)  { fmt.Printf("[NoNameAx] [-] "+format+"\n", args...) }
+const naxLogSource = "NoNameAx"
+
+func naxLogInfo(format string, args ...any) {
+	if Ts != nil {
+		Ts.TsLogAdd(adaptix.LogStatusInfo, 1, naxLogSource, "", format, args...)
+	} else {
+		fmt.Printf("[NoNameAx] [*] "+format+"\n", args...)
+	}
+}
+
+func naxLogOk(format string, args ...any) {
+	if Ts != nil {
+		Ts.TsLogAdd(adaptix.LogStatusSuccess, 1, naxLogSource, "", format, args...)
+	} else {
+		fmt.Printf("[NoNameAx] [+] "+format+"\n", args...)
+	}
+}
+
+func naxLogErr(format string, args ...any) {
+	if Ts != nil {
+		Ts.TsLogAdd(adaptix.LogStatusError, 0, naxLogSource, "", format, args...)
+	} else {
+		fmt.Printf("[NoNameAx] [-] "+format+"\n", args...)
+	}
+}
 
 // NaX wire command IDs - must match Wire.h NAX_CMD_* in the C beacon.
 const (
@@ -83,6 +105,14 @@ const (
 	STATUS_ASYNC byte = 0x10
 )
 
+// Task dispatch priority - higher value = dispatched first.
+const (
+	priorityTask         uint = 0
+	priorityTunnelCreate uint = 10
+	priorityTunnelData   uint = 11
+	priorityTunnelClose  uint = 12
+)
+
 // Adaptix BOF callback type tags - must match Bof.h CALLBACK_AX_* in the C beacon.
 const (
 	CALLBACK_SCREENSHOT byte = 0x81 // CALLBACK_AX_SCREENSHOT
@@ -97,65 +127,11 @@ const (
 	UPLOAD_CHUNK_MIN     = 4096
 )
 
-// Teamserver is the subset of Adaptix host callbacks the agent plugin uses.
-type Teamserver interface {
-	TsTaskCreate(agentId string, cmdline string, client string, taskData adaptix.TaskData)
-	TsTaskUpdate(agentId string, updateData adaptix.TaskData)
-	TsAgentUpdateData(newAgentData adaptix.AgentData) error
-	TsAgentUpdateDataPartial(agentId string, updateData any) error
-	TsScreenshotAdd(agentId string, Note string, Content []byte) error
-	TsClientGuiProcessWindows(taskData adaptix.TaskData, process []adaptix.ListingProcessDataWin)
-	TsDownloadAdd(agentId string, fileId string, fileName string, fileSize int64) error
-	TsDownloadUpdate(fileId string, state int, data []byte) error
-	TsDownloadClose(fileId string, reason int) error
-	TsDownloadSave(agentId string, fileId string, filename string, content []byte) error
-	TsAgentBuildLog(builderId string, status int, message string) error
-
-	TsExtenderDataSave(extenderName, key string, value []byte) error
-	TsExtenderDataLoad(extenderName, key string) ([]byte, error)
-	TsExtenderDataDelete(extenderName, key string) error
-	TsExtenderDataKeys(extenderName string) ([]string, error)
-
-	TsEventHookOnPost(eventType, name string, handler func(any) error) string
-
-	TsAgentConsoleOutput(agentId string, messageType int, message string, clearText string, store bool)
-
-	TsListenerInteralHandler(watermark string, data []byte) (string, error)
-	TsPivotCreate(pivotId, pAgentId, chAgentId, pivotName string, isRestore bool) error
-	TsPivotDelete(pivotId string) error
-	TsGetPivotInfoById(pivotId string) (string, string, string)
-	TsAgentProcessData(agentId string, bodyData []byte) error
-	TsAgentSetTick(agentId string, listenerName string) error
-
-	TsTunnelStart(TunnelId string) (string, error)
-	TsTunnelCreateLportfwd(AgentId string, Info string, Lhost string, Lport int, Thost string, Tport int) (string, error)
-	TsTunnelCreateRportfwd(AgentId string, Info string, Lport int, Thost string, Tport int) (string, error)
-	TsTunnelCreateSocks4(AgentId string, Info string, Lhost string, Lport int) (string, error)
-	TsTunnelCreateSocks5(AgentId string, Info string, Lhost string, Lport int, UseAuth bool, Username string, Password string) (string, error)
-	TsTunnelStopLportfwd(AgentId string, Port int)
-	TsTunnelStopRportfwd(AgentId string, Port int)
-	TsTunnelStopSocks(AgentId string, Port int)
-	TsTunnelUpdateRportfwd(tunnelId int, result bool) (string, string, error)
-	TsTunnelConnectionResume(AgentId string, channelId int, ioDirect bool)
-	TsTunnelConnectionClose(channelId int, writeOnly bool)
-	TsTunnelConnectionData(channelId int, data []byte)
-	TsTunnelConnectionAccept(tunnelId int, channelId int)
-	TsTunnelConnectionHalt(channelId int, errorCode byte)
-	TsTunnelPause(channelId int)
-	TsTunnelResume(channelId int)
-
-	TsTerminalConnResume(agentId string, terminalId string, ioDirect bool)
-	TsTerminalConnData(terminalId string, data []byte)
-	TsTerminalConnClose(terminalId string, reason string) error
-	TsConvertCpToUTF8(input string, codePage int) string
-	TsConvertUTF8toCp(input string, codePage int) string
-}
 
 type PluginAgent struct{}
-type ExtenderAgent struct{}
 
 var (
-	Ts             Teamserver
+	Ts             adaptix.Teamserver
 	ModuleDir      string
 	AgentWatermark string
 
@@ -166,42 +142,39 @@ var (
 	// Key: beaconID (string), Value: adaptix.AgentData (identity fields only).
 	agentIdentityCache sync.Map
 
+	// agentIdToBeaconId maps the server-assigned int64 agent ID back to the
+	// beacon's UID string so that event hooks (which receive int64) can look
+	// up the beaconID for cache cleanup.
+	// Key: int64 (agentId), Value: string (beaconID).
+	agentIdToBeaconId sync.Map
+
 	// pendingCmdIds tracks the cmd_id (first byte of task.Data) for each in-flight
 	// task so that ProcessData can take type-specific actions when the result arrives
 	// (e.g. calling TsAgentUpdateData after a CMD_SLEEP response).
-	// Key: TaskId (8-char hex string), Value: cmd_id (byte).
+	// Key: TaskId (int64), Value: cmd_id (byte).
 	pendingCmdIds sync.Map
 
 	// activeJobs tracks async BOF jobs that have been acknowledged (STATUS_ASYNC)
 	// but not yet completed. When a result arrives for a tracked taskId, it's
 	// handled as job output rather than a regular command result.
-	// Key: TaskId (8-char hex string), Value: true.
+	// Key: TaskId (int64), Value: true.
 	activeJobs sync.Map
 
 	// activeShells tracks remote shell sessions. When a SHELL_START task
 	// is dispatched, the taskId (= terminalId) is stored here. Results
 	// arriving for tracked shell IDs route to terminal handling.
-	// Key: TaskId (8-char hex string), Value: true.
+	// Key: TaskId (int64), Value: true.
 	activeShells sync.Map
 
 	// activeDownloads tracks chunked downloads in progress.  The first result
 	// (DL_START) stores the cmdId here; subsequent results (DL_CONTINUE/DL_FINISH)
 	// use it since pendingCmdIds is consumed on the first hit.
-	// Key: TaskId (8-char hex string), Value: true.
+	// Key: TaskId (int64), Value: true.
 	activeDownloads sync.Map
 
-	// activeUploads tracks upload sessions in progress (drip-fed one chunk per heartbeat).
-	// Key: memoryId (uint32), Value: *uploadSession.
-	activeUploads sync.Map
-
-	// taskMemoryIds maps SAVEMEMORY and UPLOAD taskIds to their memoryId
-	// so result handlers can look up upload progress state.
-	// Key: TaskId (8-char hex string), Value: uint32 memoryId.
-	taskMemoryIds sync.Map
-
-	// pendingProfiles holds the ProfileConfig for CMD_PROFILE tasks that have
+	// pendingProfiles holds the naxwire.ProfileConfig for CMD_PROFILE tasks that have
 	// been sent to the beacon but not yet confirmed.
-	// Key: agentId (string), Value: *ProfileConfig.
+	// Key: agentId (int64), Value: *naxwire.ProfileConfig.
 	pendingProfiles sync.Map
 
 	// sleepmaskBofCache holds the compiled sleepmask BOF (.o) bytes.
@@ -221,56 +194,64 @@ const (
 func InitPlugin(ts any, moduleDir string, watermark string) adaptix.PluginAgent {
 	ModuleDir = moduleDir
 	AgentWatermark = watermark
-	if ts != nil {
-		Ts, _ = ts.(Teamserver)
-	}
+	Ts = ts.(adaptix.Teamserver)
 	loadCacheFromStore()
 	registerCleanupHooks()
 	return &PluginAgent{}
 }
 
-// --- PluginAgent stubs ---
-
-func (p *PluginAgent) GetExtender() adaptix.ExtenderAgent {
-	return &ExtenderAgent{}
+func (p *PluginAgent) Call(operator string, agentId int64, function string, args string) {
+	_ = operator
+	_ = agentId
+	_ = function
+	_ = args
 }
 
 func (p *PluginAgent) GenerateProfiles(profile adaptix.BuildProfile) ([][]byte, error) {
 	return nil, nil
 }
 
-// --- ExtenderAgent crypto ---
+func (p *PluginAgent) AgentRestore(agentData adaptix.AgentData) adaptix.AgentFunctions {
+	beaconID := string(agentData.UID)
+	if beaconID != "" {
+		agentIdToBeaconId.Store(agentData.Id, beaconID)
+	}
+	return buildAgentFunctions()
+}
 
-// Encrypt AES-128-CBC-encrypts data using the agent's SessionKey.
-// The Adaptix server calls this in PackData before handing packed tasks
-// to the listener (HTTP) or PivotPackData (SMB pivot). The listener
-// must NOT add its own encryption layer on top - it only applies
-// profile transforms (prepend/append/encode/mask).
-func (ext *ExtenderAgent) Encrypt(data []byte, key []byte) ([]byte, error) {
+/* ========= [ AgentFunctions builder ] ========= */
+
+func buildAgentFunctions() adaptix.AgentFunctions {
+	return adaptix.AgentFunctions{
+		CreateCommand: naxCreateCommand,
+		PackTasks:     naxPackTasks,
+		ProcessData:   naxProcessData,
+		Encrypt:       naxEncrypt,
+		Decrypt:       naxDecrypt,
+		Delivery:      nil,
+		PivotPackData: naxPivotPackData,
+		TunnelCB:      naxTunnelCallbacks(),
+		TerminalCB:    naxTerminalCallbacks(),
+	}
+}
+
+/* ========= [ AgentFunctions crypto ] ========= */
+
+func naxEncrypt(data []byte, key []byte) ([]byte, error) {
 	if len(key) != 16 {
 		return data, nil
 	}
-	return EncryptCBCRandomIV(key, data)
+	return naxwire.EncryptCBCRandomIV(key, data)
 }
 
-// Decrypt AES-128-CBC-decrypts data using the agent's SessionKey.
-// The server calls this before ProcessData for both HTTP and pivot paths.
-// The listener strips profile transforms but does NOT decrypt - that
-// responsibility lives here so pivots (where no listener is involved)
-// also get proper decryption.
-func (ext *ExtenderAgent) Decrypt(data []byte, key []byte) ([]byte, error) {
+func naxDecrypt(data []byte, key []byte) ([]byte, error) {
 	if len(key) != 16 {
 		return data, nil
 	}
-	return DecryptCBC(key, data)
+	return naxwire.DecryptCBC(key, data)
 }
 
-// PackTasks serialises ALL pending tasks into one response payload.
-// Adaptix calls this once per agent check-in with every queued task and marks
-// all of them as dispatched after the call returns - tasks not included in the
-// returned bytes are silently dropped.  Concatenating all task frames here lets
-// the beacon process them sequentially in a single response cycle.
-func (ext *ExtenderAgent) PackTasks(agentData adaptix.AgentData, tasks []adaptix.TaskData) ([]byte, error) {
+func naxPackTasks(agentData adaptix.AgentData, tasks []adaptix.TaskData) ([]byte, error) {
 	if len(tasks) == 0 {
 		return nil, nil
 	}
@@ -279,22 +260,18 @@ func (ext *ExtenderAgent) PackTasks(agentData adaptix.AgentData, tasks []adaptix
 		if len(task.Data) == 0 {
 			continue
 		}
-		taskIdInt, err := strconv.ParseInt(task.TaskId, 16, 64)
-		if err != nil {
-			return nil, fmt.Errorf("nonameax: PackTasks: bad TaskId %q: %w", task.TaskId, err)
-		}
 		pendingCmdIds.Store(task.TaskId, task.Data[0])
-		body := EncodeTaskBody(uint32(taskIdInt), task.Data)
-		out = append(out, EncodeFrame(WireTypeTask, body)...)
+		body := naxwire.EncodeTaskBody(uint32(task.TaskId), task.Data)
+		out = append(out, naxwire.EncodeFrame(naxwire.WireTypeTask, body)...)
 	}
 	return out, nil
 }
 
-func (ext *ExtenderAgent) PivotPackData(pivotId string, data []byte) (adaptix.TaskData, error) {
+func naxPivotPackData(pivotId string, data []byte) (adaptix.TaskData, error) {
 	if len(data) == 0 {
 		return adaptix.TaskData{}, fmt.Errorf("nonameax: PivotPackData: empty data for pivotId %q (child has no tasks)", pivotId)
 	}
-	pivotIdInt, err := strconv.ParseUint(pivotId, 16, 32)
+	pivotIdInt, err := parseHexUint32(pivotId)
 	if err != nil {
 		return adaptix.TaskData{}, fmt.Errorf("nonameax: PivotPackData: bad pivotId %q: %w", pivotId, err)
 	}
@@ -303,23 +280,47 @@ func (ext *ExtenderAgent) PivotPackData(pivotId string, data []byte) (adaptix.Ta
 	buf := make([]byte, 5+argsLen)
 	buf[0] = CMD_PIVOT_EXEC
 	binary.LittleEndian.PutUint32(buf[1:5], uint32(argsLen))
-	binary.LittleEndian.PutUint32(buf[5:9], uint32(pivotIdInt))
+	binary.LittleEndian.PutUint32(buf[5:9], pivotIdInt)
 	binary.LittleEndian.PutUint32(buf[9:13], uint32(len(data)))
 	copy(buf[13:], data)
 
-	taskData := adaptix.TaskData{
-		TaskId: fmt.Sprintf("%08x", rand.Uint32()),
-		Type:   adaptix.TASK_TYPE_PROXY_DATA,
-		Data:   buf,
-		Sync:   false,
+	var taskId int64
+	if Ts != nil {
+		taskId = Ts.TsTaskGenID()
+	} else {
+		taskId = int64(rand.Uint32())
 	}
-	return taskData, nil
+	td := adaptix.MakeProxyTask(buf, priorityTunnelData)
+	td.TaskId = taskId
+	return td, nil
 }
 
-func (ext *ExtenderAgent) TunnelCallbacks() adaptix.TunnelCallbacks {
+func parseHexUint32(s string) (uint32, error) {
+	var v uint64
+	for _, c := range s {
+		v <<= 4
+		switch {
+		case c >= '0' && c <= '9':
+			v |= uint64(c - '0')
+		case c >= 'a' && c <= 'f':
+			v |= uint64(c-'a') + 10
+		case c >= 'A' && c <= 'F':
+			v |= uint64(c-'A') + 10
+		default:
+			return 0, fmt.Errorf("invalid hex char %q", c)
+		}
+	}
+	if v > 0xFFFFFFFF {
+		return 0, fmt.Errorf("value exceeds uint32")
+	}
+	return uint32(v), nil
+}
+
+func naxTunnelCallbacks() adaptix.TunnelCallbacks {
 	return adaptix.TunnelCallbacks{
 		ConnectTCP: tunnelConnectTCP,
 		ConnectUDP: tunnelConnectUDP,
+		BindTCP:    tunnelBindTCP,
 		WriteTCP:   tunnelWriteTCP,
 		WriteUDP:   tunnelWriteUDP,
 		Pause:      tunnelPause,
@@ -329,7 +330,7 @@ func (ext *ExtenderAgent) TunnelCallbacks() adaptix.TunnelCallbacks {
 	}
 }
 
-func (ext *ExtenderAgent) TerminalCallbacks() adaptix.TerminalCallbacks {
+func naxTerminalCallbacks() adaptix.TerminalCallbacks {
 	return adaptix.TerminalCallbacks{
 		Start: terminalStart,
 		Write: terminalWrite,
@@ -337,9 +338,8 @@ func (ext *ExtenderAgent) TerminalCallbacks() adaptix.TerminalCallbacks {
 	}
 }
 
-func terminalStart(terminalId int, program string, sizeH int, sizeW int, oemCP int) adaptix.TaskData {
-	taskIdStr := fmt.Sprintf("%08x", uint32(terminalId))
-	activeShells.Store(taskIdStr, true)
+func terminalStart(terminalId int64, program string, sizeH int, sizeW int, oemCP int) adaptix.TaskData {
+	activeShells.Store(terminalId, true)
 
 	programOEM := ""
 	if Ts != nil {
@@ -357,15 +357,12 @@ func terminalStart(terminalId int, program string, sizeH int, sizeW int, oemCP i
 	binary.LittleEndian.PutUint32(data[5:9], uint32(len(programBytes)))
 	copy(data[9:], programBytes)
 
-	return adaptix.TaskData{
-		TaskId: taskIdStr,
-		Type:   adaptix.TASK_TYPE_PROXY_DATA,
-		Data:   data,
-		Sync:   false,
-	}
+	td := adaptix.MakeProxyTask(data, priorityTunnelCreate)
+	td.TaskId = terminalId
+	return td
 }
 
-func terminalWrite(terminalId int, oemCP int, data []byte) adaptix.TaskData {
+func terminalWrite(terminalId int64, oemCP int, data []byte) adaptix.TaskData {
 	dataOEM := ""
 	if Ts != nil {
 		dataOEM = Ts.TsConvertUTF8toCp(string(data), oemCP)
@@ -386,17 +383,19 @@ func terminalWrite(terminalId int, oemCP int, data []byte) adaptix.TaskData {
 	binary.LittleEndian.PutUint32(buf[9:13], uint32(len(dataBytes)))
 	copy(buf[13:], dataBytes)
 
-	return adaptix.TaskData{
-		TaskId: fmt.Sprintf("%08x", rand.Uint32()),
-		Type:   adaptix.TASK_TYPE_PROXY_DATA,
-		Data:   buf,
-		Sync:   false,
+	var taskId int64
+	if Ts != nil {
+		taskId = Ts.TsTaskGenID()
+	} else {
+		taskId = int64(rand.Uint32())
 	}
+	td := adaptix.MakeProxyTask(buf, priorityTunnelData)
+	td.TaskId = taskId
+	return td
 }
 
-func terminalClose(terminalId int) adaptix.TaskData {
-	taskIdStr := fmt.Sprintf("%08x", uint32(terminalId))
-	activeShells.Delete(taskIdStr)
+func terminalClose(terminalId int64) adaptix.TaskData {
+	activeShells.Delete(terminalId)
 
 	// Wire: cmd_id(1) | args_len(4LE) | terminalId(4LE)
 	data := make([]byte, 9)
@@ -404,12 +403,15 @@ func terminalClose(terminalId int) adaptix.TaskData {
 	binary.LittleEndian.PutUint32(data[1:5], 4)
 	binary.LittleEndian.PutUint32(data[5:9], uint32(terminalId))
 
-	return adaptix.TaskData{
-		TaskId: fmt.Sprintf("%08x", rand.Uint32()),
-		Type:   adaptix.TASK_TYPE_PROXY_DATA,
-		Data:   data,
-		Sync:   false,
+	var taskId int64
+	if Ts != nil {
+		taskId = Ts.TsTaskGenID()
+	} else {
+		taskId = int64(rand.Uint32())
 	}
+	td := adaptix.MakeProxyTask(data, priorityTunnelClose)
+	td.TaskId = taskId
+	return td
 }
 
 // saveProfileToStore persists a profile override via TsExtenderData so the

@@ -63,10 +63,10 @@ C_SRCS_CORE := Main.c \
 # Transport-specific sources
 ifeq ($(NAX_TRANSPORT_PROFILE),1)
 # SMB variant: pipe transport + pivot (for chained pivots)
-C_SRCS_TRANSPORT := Smb.c Pivot.c Tunnel.c
+C_SRCS_TRANSPORT := Smb.c Relay.c Pivot.c Tunnel.c
 else
 # HTTP variant: full HTTP + profile + pivot parent-side
-C_SRCS_TRANSPORT := Http.c HttpCodec.c Smb.c PackerProfile.c Profile.c Pivot.c Tunnel.c
+C_SRCS_TRANSPORT := Http.c HttpCodec.c Smb.c Relay.c PackerProfile.c Profile.c Pivot.c Tunnel.c
 endif
 
 C_SRCS_FLAT := $(C_SRCS_CORE) $(C_SRCS_TRANSPORT)

@@ -1,8 +1,4 @@
-package main
-
-// DO NOT EDIT IN ISOLATION - keep byte-identical with
-// extender/listener_nonameax_http/pl_crypto.go. See ADR-002 for the
-// duplicate-instead-of-share decision.
+package naxwire
 
 import (
 	"crypto/aes"

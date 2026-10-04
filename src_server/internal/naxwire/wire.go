@@ -1,8 +1,5 @@
-package main
+package naxwire
 
-// DO NOT EDIT IN ISOLATION - keep byte-identical with
-// extender/agent_nonameax/pl_wire.go. See ADR-002.
-//
 // Implements the wire frame layout from docs/protocol/wire-v0.md:
 //   +--------+----------+-------------------+------------------+
 //   | type:1 | flags:1  | bodylen:4 (LE)    | body bytes       |

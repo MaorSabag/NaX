@@ -4,47 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	adaptix "github.com/Adaptix-Framework/axc2"
+	adaptix "github.com/Adaptix-Framework/axc2/v2"
 )
-
-// Teamserver is the subset of Adaptix host callbacks the listener uses.
-// Method signatures mirror those declared in
-//
-//	out_source_projects/Kharon/listener_kharon_http/src_server/pl_main.go:11-15
-//
-// Add to it as Phase 3+ tasks need more callbacks.
-type Teamserver interface {
-	// TsAgentIsExists returns true when the server has a registered agent
-	// with the given Id (the server-assigned AgentData.Id, *not* a beaconID).
-	// Used by the listener to invalidate stale beaconID → adaptixID entries
-	// after an operator deletes a session from the GUI.
-	TsAgentIsExists(agentId string) bool
-
-	// TsAgentCreate registers a new agent. The returned AgentData.Id is the
-	// server-assigned ID that must be used for all subsequent agent calls.
-	TsAgentCreate(agentCrc, agentId string, beat []byte,
-		listenerName, ExternalIP string, Async bool) (adaptix.AgentData, error)
-
-	// TsAgentProcessData hands a decrypted beacon body up to the server.
-	// agentId must be the server-assigned AgentData.Id (not the beaconID).
-	TsAgentProcessData(agentId string, bodyData []byte) error
-
-	// TsAgentGetHostedAll retrieves pre-packed task bytes for the agent
-	// (the output of ExtenderAgent.PackTasks).  Returns (nil, nil) when no
-	// tasks are queued.  maxSize=0 means no cap on the returned data.
-	// agentId must be the server-assigned AgentData.Id (not the beaconID).
-	TsAgentGetHostedAll(agentId string, maxSize int) ([]byte, error)
-
-	// TsAgentSetTick stamps LastTick = now and sets agent.Tick = true.
-	// A background goroutine (TsAgentTickUpdate, ~800 ms) collects all agents
-	// with Tick = true and sends a SpAgentTick packet to connected clients,
-	// which drives the "Last" column countdown in the operator UI.
-	// Must be called on every successful beacon round-trip.
-	TsAgentSetTick(agentId string, listenerName string) error
-
-	TsExtenderDataLoad(extenderName, key string) ([]byte, error)
-	TsExtenderDataKeys(extenderName string) ([]string, error)
-}
 
 type PluginListener struct{}
 
@@ -56,19 +17,24 @@ type extenderListener struct {
 }
 
 var (
-	Ts              Teamserver
+	Ts              adaptix.Teamserver
 	ModuleDir       string
 	ListenerDataDir string
 )
 
 // InitPlugin is the symbol Adaptix Server looks up after loading the .so.
 // Signature mirrors the Kharon reference listener plugin (three params).
+func (p *PluginListener) Call(operator string, listenerName string, function string, args string) {
+	_ = operator
+	_ = listenerName
+	_ = function
+	_ = args
+}
+
 func InitPlugin(ts any, moduleDir string, listenerDir string) adaptix.PluginListener {
 	ModuleDir = moduleDir
 	ListenerDataDir = listenerDir
-	if ts != nil {
-		Ts, _ = ts.(Teamserver)
-	}
+	Ts = ts.(adaptix.Teamserver)
 	return &PluginListener{}
 }
 
@@ -113,6 +79,7 @@ func (a *extenderListener) Edit(config string) (adaptix.ListenerData, []byte, er
 	return a.srv.edit(config)
 }
 
+
 func (a *extenderListener) GetProfile() ([]byte, error) {
 	return a.srv.profileJSON()
 }
@@ -120,26 +87,34 @@ func (a *extenderListener) GetProfile() ([]byte, error) {
 // InternalHandler processes a child agent's first beat arriving via a pivot
 // (SMB named pipe). The parent extracted the watermark and the server used it
 // to route here. data = sessionId(16) + encrypted_frame.
-func (a *extenderListener) InternalHandler(data []byte) (string, error) {
+func (a *extenderListener) InternalHandler(data []byte) (int64, error) {
 	naxListenerLogInfo("InternalHandler: data len=%d", len(data))
 	if len(data) < 17 {
-		return "", fmt.Errorf("InternalHandler: data too short (%d)", len(data))
+		return 0, fmt.Errorf("InternalHandler: data too short (%d)", len(data))
 	}
 	beaconID := string(data[:16])
-	ciphertext := data[16:]
-	naxListenerLogInfo("InternalHandler: beaconID=%s ciphertextLen=%d keyPrefix=%x", beaconID, len(ciphertext), a.srv.encryptKey[:4])
+	naxListenerLogInfo("InternalHandler: beaconID=%s dataLen=%d keyPrefix=%x", beaconID, len(data), a.srv.encryptKey[:4])
 
+	if a.srv.ts != nil {
+		if id, found := a.srv.ts.TsAgentIdByUID([]byte(beaconID)); found {
+			naxListenerLogInfo("InternalHandler: agent already exists, returning %d", id)
+			a.srv.agentIDMap.Store(beaconID, id)
+			return id, nil
+		}
+	}
+
+	ciphertext := data[16:]
 	beatWithId := make([]byte, 16+16+len(ciphertext))
 	copy(beatWithId[:16], beaconID)
 	copy(beatWithId[16:32], a.srv.encryptKey)
 	copy(beatWithId[32:], ciphertext)
 
-	agentData, err := a.srv.ts.TsAgentCreate(agentWatermark, beaconID, beatWithId, a.name, "0.0.0.0", false)
+	agentData, err := a.srv.ts.TsAgentCreate(agentWatermark, []byte(beaconID), beatWithId, a.name, "0.0.0.0", false)
 	if err != nil {
 		naxListenerLogErr("InternalHandler: TsAgentCreate failed: %v", err)
-		return "", fmt.Errorf("InternalHandler: TsAgentCreate: %w", err)
+		return 0, fmt.Errorf("InternalHandler: TsAgentCreate: %w", err)
 	}
-	naxListenerLogInfo("InternalHandler: child agent created id=%s", agentData.Id)
+	naxListenerLogOk("InternalHandler: child agent created id=%d", agentData.Id)
 	a.srv.agentIDMap.Store(beaconID, agentData.Id)
 	return agentData.Id, nil
 }

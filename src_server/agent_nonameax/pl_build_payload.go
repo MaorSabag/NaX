@@ -12,7 +12,8 @@ import (
 	"strconv"
 	"strings"
 
-	adaptix "github.com/Adaptix-Framework/axc2"
+	adaptix "github.com/Adaptix-Framework/axc2/v2"
+	"nonameax/naxwire"
 )
 
 func splitHostPort(hp string) (host string, port int, portExplicit bool) {
@@ -140,7 +141,7 @@ func (p *PluginAgent) BuildPayload(profile adaptix.BuildProfile, agentProfiles [
 		if len(profCfg.Hosts) == 0 {
 			return nil, "", errors.New("nonameax: BuildPayload: no callback hosts in listener profile (set Hosts in the listener config)")
 		}
-		profileBytes = EncodeProfileBodyV2(profCfg)
+		profileBytes = naxwire.EncodeProfileBodyV2(profCfg)
 
 		callbackHost, callbackPort, portExplicit := splitHostPort(profCfg.Hosts[0])
 
@@ -547,7 +548,7 @@ func (p *PluginAgent) BuildPayload(profile adaptix.BuildProfile, agentProfiles [
 	/* ========= [ PE wrapper (exe/dll/svc) ] ========= */
 	if outputFormat != "bin" {
 		buildLog(1, "Wrapping PIC in PE format: %s", outputFormat)
-		wrapped, peFilename, err := compileWrapper(payload, outputFormat, svcName, dllExport, debug, buildLog)
+		wrapped, peFilename, err := compileWrapper(payload, outputFormat, svcName, dllExport, debug, "", buildLog)
 		if err != nil {
 			buildLog(2, "PE wrapper failed: %v", err)
 			return nil, "", fmt.Errorf("nonameax: PE wrapper: %w", err)

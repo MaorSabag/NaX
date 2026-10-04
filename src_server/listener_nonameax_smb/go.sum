@@ -1,2 +1,4 @@
-github.com/Adaptix-Framework/axc2 v1.2.0 h1:WYEg502NTTtX1tQJUz2AaC2dmm/bS/1L1iOHOQ5kEYA=
-github.com/Adaptix-Framework/axc2 v1.2.0/go.mod h1:3oJyFeRVIql1RTsNa0meEqK3+P+6JTAMMjMdVyXhbaQ=
+github.com/Adaptix-Framework/axc2/v2 v2.0.14 h1:ZJ4E9zlqhwC0eP1K+UShyEp4UCQ0KMCIC6wxISl0ap4=
+github.com/Adaptix-Framework/axc2/v2 v2.0.14/go.mod h1:CHHEn2pgC6w+WqVK4j5ATNKrSas3Mw9XPTdsJAg5JWc=
+github.com/Adaptix-Framework/axsafe v0.0.0-20260712144531-7ba271ad9303 h1:+76vAhnBfvYhARWoNy4S1d+wNY1sj472nq1YkNs+IoU=
+github.com/Adaptix-Framework/axsafe v0.0.0-20260712144531-7ba271ad9303/go.mod h1:glgqENQSncT+na7JAtzM1uPUocB/lgoUgCz01jouWm0=

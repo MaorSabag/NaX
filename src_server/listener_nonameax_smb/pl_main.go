@@ -5,17 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	adaptix "github.com/Adaptix-Framework/axc2"
+	adaptix "github.com/Adaptix-Framework/axc2/v2"
 )
-
-type Teamserver interface {
-	TsAgentIsExists(agentId string) bool
-	TsAgentCreate(agentCrc, agentId string, beat []byte,
-		listenerName, ExternalIP string, Async bool) (adaptix.AgentData, error)
-	TsAgentProcessData(agentId string, bodyData []byte) error
-	TsAgentGetHostedAll(agentId string, maxSize int) ([]byte, error)
-	TsAgentSetTick(agentId string, listenerName string) error
-}
 
 type PluginListener struct{}
 
@@ -26,17 +17,22 @@ type extenderListener struct {
 }
 
 var (
-	Ts              Teamserver
+	Ts              adaptix.Teamserver
 	ModuleDir       string
 	ListenerDataDir string
 )
 
+func (p *PluginListener) Call(operator string, listenerName string, function string, args string) {
+	_ = operator
+	_ = listenerName
+	_ = function
+	_ = args
+}
+
 func InitPlugin(ts any, moduleDir string, listenerDir string) adaptix.PluginListener {
 	ModuleDir = moduleDir
 	ListenerDataDir = listenerDir
-	if ts != nil {
-		Ts, _ = ts.(Teamserver)
-	}
+	Ts = ts.(adaptix.Teamserver)
 	return &PluginListener{}
 }
 
@@ -106,35 +102,35 @@ func (a *extenderListener) GetProfile() ([]byte, error) {
 	return json.Marshal(profile)
 }
 
-func (a *extenderListener) InternalHandler(data []byte) (string, error) {
+func (a *extenderListener) InternalHandler(data []byte) (int64, error) {
 	if Ts == nil {
-		return "", fmt.Errorf("smb listener: teamserver not available")
+		return 0, fmt.Errorf("smb listener: teamserver not available")
 	}
 	if len(data) < 17 {
-		return "", fmt.Errorf("smb listener: data too short (%d)", len(data))
+		return 0, fmt.Errorf("smb listener: data too short (%d)", len(data))
 	}
 	beaconID := string(data[:16])
 
-	fmt.Printf("[SMB-Listener] InternalHandler: listener=%s beaconID=%s dataLen=%d keyPrefix=%x\n", a.name, beaconID, len(data), a.encryptKey[:4])
+	Ts.TsLogAdd(adaptix.LogStatusInfo, 1, "NoNameAx-SMB", "", "InternalHandler: listener=%s beaconID=%s dataLen=%d keyPrefix=%x", a.name, beaconID, len(data), a.encryptKey[:4])
 
-	if Ts.TsAgentIsExists(beaconID) {
-		fmt.Printf("[SMB-Listener] InternalHandler: agent already exists, returning %s\n", beaconID)
-		return beaconID, nil
+	if id, ok := Ts.TsAgentIdByUID([]byte(beaconID)); ok {
+		Ts.TsLogAdd(adaptix.LogStatusInfo, 1, "NoNameAx-SMB", "", "InternalHandler: agent already exists, returning %d", id)
+		return id, nil
 	}
 
 	ciphertext := data[16:]
-	fmt.Printf("[SMB-Listener] InternalHandler: ciphertextLen=%d first16=%x\n", len(ciphertext), ciphertext[:min(16, len(ciphertext))])
+	Ts.TsLogAdd(adaptix.LogStatusInfo, 1, "NoNameAx-SMB", "", "InternalHandler: ciphertextLen=%d first16=%x", len(ciphertext), ciphertext[:min(16, len(ciphertext))])
 
 	beatWithId := make([]byte, 16+16+len(ciphertext))
 	copy(beatWithId[:16], beaconID)
 	copy(beatWithId[16:32], a.encryptKey)
 	copy(beatWithId[32:], ciphertext)
 
-	agentData, err := Ts.TsAgentCreate("a04a4178", beaconID, beatWithId, a.name, "", false)
+	agentData, err := Ts.TsAgentCreate("a04a4178", []byte(beaconID), beatWithId, a.name, "", false)
 	if err != nil {
-		return "", fmt.Errorf("smb listener: TsAgentCreate: %w", err)
+		return 0, fmt.Errorf("smb listener: TsAgentCreate: %w", err)
 	}
-	fmt.Printf("[SMB-Listener] InternalHandler: agent created id=%s\n", agentData.Id)
+	Ts.TsLogAdd(adaptix.LogStatusSuccess, 1, "NoNameAx-SMB", "", "InternalHandler: agent created id=%d", agentData.Id)
 	return agentData.Id, nil
 }
 

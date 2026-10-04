@@ -47,7 +47,7 @@
 #define BOF_ERROR_ALLOC         0x105   /* section allocation failed   */
 
 #define BOF_MAX_SECTIONS        16      /* hard cap on sections per BOF */
-#define BOF_OUTPUT_CAP          8192    /* heap output buffer capacity  */
+#define BOF_OUTPUT_CAP          8192    /* initial output buffer; grows to 4 MB */
 
 /* NtCurrentProcess() / NtCurrentThread() are provided by ntdll.h via Instance.h */
 
@@ -127,7 +127,7 @@ typedef struct {
 
 typedef struct {
     UINT32 Hash;   /* FNV1a-32 of function name (no __imp_ prefix) */
-    PVOID  Proc;
+    PVOID  Proc;   /* pointer to our implementation                 */
 } NAX_BOF_API;
 
 #define NAX_BOF_API_COUNT 33   /* 15 original + 6 beacon.h + 2 adaptix.h + 4 Win32 proxy + 2 async BOF + 3 KV store + 1 heap redirect */

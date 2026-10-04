@@ -99,7 +99,10 @@ function ListenerUI(mode_create)
     let comboRotation = form.create_combo(); comboRotation.addItems(["sequential","random"]);
     comboRotation.setEnabled(mode_create);
     let textHosts     = form.create_list(); textHosts.setButtonsEnabled(mode_create); textHosts.addItem("192.168.77.128:8080");
-    let btnImport     = form.create_button("Import JSON");
+    let profileFileSelector = form.create_selector_file();
+    profileFileSelector.setPlaceholder("Select profile JSON file...");
+    profileFileSelector.setEnabled(mode_create);
+    let btnImport     = form.create_button("Import");
     btnImport.setEnabled(mode_create);
     let btnExport     = form.create_button("Export JSON");
     let textProfileJson = form.create_textmulti("");
@@ -110,8 +113,8 @@ function ListenerUI(mode_create)
     genLayout.addWidget(form.create_label("Beacon ID:"),   1, 0); genLayout.addWidget(textBeaconHdr, 1, 1, 1, 2);
     genLayout.addWidget(form.create_label("Rotation:"),    2, 0); genLayout.addWidget(comboRotation, 2, 1, 1, 2);
     genLayout.addWidget(form.create_label("Hosts:"),       3, 0); genLayout.addWidget(textHosts,     3, 1, 1, 2);
-    genLayout.addWidget(btnImport, 4, 0); genLayout.addWidget(btnExport, 4, 1);
-    genLayout.addWidget(textProfileJson, 5, 0, 1, 3);
+    genLayout.addWidget(form.create_label("Profile:"),     4, 0); genLayout.addWidget(profileFileSelector, 4, 1); genLayout.addWidget(btnImport, 4, 2);
+    genLayout.addWidget(btnExport, 5, 0); genLayout.addWidget(textProfileJson, 5, 1, 1, 2);
 
     let genPanel = form.create_panel(); genPanel.setLayout(genLayout);
 
@@ -198,18 +201,28 @@ function ListenerUI(mode_create)
         }
     }
 
+    function applyProfileJson(json) {
+        let p = JSON.parse(json);
+        let cb = (p.callbacks && p.callbacks[0]) ? p.callbacks[0] : p;
+        loadProfile(cb);
+        textProfileJson.setText(JSON.stringify(p, null, 2));
+    }
+
     form.connect(btnImport, "clicked", function() {
-        let path = ax.prompt_open_file("Import Profile JSON", "*.json");
-        if (path) {
-            let b64 = ax.file_read(path);
-            if (b64) {
-                let json = ax.decode_data("base64", b64, "");
-                try {
-                    let p = JSON.parse(json);
-                    let cb = (p.callbacks && p.callbacks[0]) ? p.callbacks[0] : p;
-                    loadProfile(cb);
-                    textProfileJson.setText(json);
-                } catch(e) { ax.log_error("Failed to parse JSON: " + e); }
+        let b64 = profileFileSelector.content();
+        if (b64) {
+            try {
+                let buf = ax.decode_data("base64", b64);
+                let arr = new Uint8Array(buf);
+                let json = "";
+                for (let i = 0; i < arr.length; i++) json += String.fromCharCode(arr[i]);
+                applyProfileJson(json);
+            } catch(e) { ax.log_error("Failed to parse profile JSON: " + e); }
+        } else {
+            let json = textProfileJson.text();
+            if (json && json.trim()) {
+                try { applyProfileJson(json); }
+                catch(e) { ax.log_error("Failed to parse profile JSON: " + e); }
             }
         }
     });
@@ -227,8 +240,6 @@ function ListenerUI(mode_create)
         }] };
         let json = JSON.stringify(profile, null, 2);
         textProfileJson.setText(json);
-        let path = ax.prompt_save_file("profile.json", "Export Profile JSON", "*.json");
-        if (path) ax.file_write_text(path, json);
     });
 
     // ========= [ Tabs ] =========

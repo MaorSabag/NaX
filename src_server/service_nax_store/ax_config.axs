@@ -24,10 +24,101 @@ var g_fld_profile  = null;
 function InitService() {
     ax.log("NaX Store Manager service loaded.");
 
-    let action = menu.create_action("NaX Store Manager", function() {
-        openStoreDialog();
+    let combo = form.create_combo();
+    g_combo = combo;
+
+    let lblCount = form.create_label("Entries: -");
+    g_count_lbl = lblCount;
+
+    form.connect(combo, "currentIndexChanged", function() {
+        let agentId = selectedAgentId();
+        if (agentId !== "") {
+            ax.service_command("nax_store", "details", { agent_id: agentId });
+        }
     });
-    menu.add_main_axscript(action);
+
+    let fld_id       = form.create_textline(""); fld_id.setReadOnly(true);       g_fld_id = fld_id;
+    let fld_computer = form.create_textline(""); fld_computer.setReadOnly(true); g_fld_computer = fld_computer;
+    let fld_user     = form.create_textline(""); fld_user.setReadOnly(true);     g_fld_user = fld_user;
+    let fld_domain   = form.create_textline(""); fld_domain.setReadOnly(true);   g_fld_domain = fld_domain;
+    let fld_arch     = form.create_textline(""); fld_arch.setReadOnly(true);     g_fld_arch = fld_arch;
+    let fld_pid      = form.create_textline(""); fld_pid.setReadOnly(true);      g_fld_pid = fld_pid;
+    let fld_process  = form.create_textline(""); fld_process.setReadOnly(true);  g_fld_process = fld_process;
+    let fld_ip       = form.create_textline(""); fld_ip.setReadOnly(true);       g_fld_ip = fld_ip;
+    let fld_os       = form.create_textline(""); fld_os.setReadOnly(true);       g_fld_os = fld_os;
+    let fld_elevated = form.create_textline(""); fld_elevated.setReadOnly(true); g_fld_elevated = fld_elevated;
+    let fld_sleep    = form.create_textline(""); fld_sleep.setReadOnly(true);    g_fld_sleep = fld_sleep;
+    let fld_profile  = form.create_textline(""); fld_profile.setReadOnly(true);  g_fld_profile = fld_profile;
+
+    let selectGrid = form.create_gridlayout();
+    selectGrid.addWidget(form.create_label("Agent:"), 0, 0, 1, 1);
+    selectGrid.addWidget(combo,                       0, 1, 1, 3);
+    selectGrid.addWidget(lblCount,                    1, 0, 1, 1);
+
+    let selectPanel = form.create_panel();
+    selectPanel.setLayout(selectGrid);
+    let grpSelect = form.create_groupbox("Select Agent", false);
+    grpSelect.setPanel(selectPanel);
+
+    let detailGrid = form.create_gridlayout();
+    detailGrid.addWidget(form.create_label("Agent ID:"),    0, 0, 1, 1);  detailGrid.addWidget(fld_id,       0, 1, 1, 3);
+    detailGrid.addWidget(form.create_label("Computer:"),    1, 0, 1, 1);  detailGrid.addWidget(fld_computer, 1, 1, 1, 1);
+    detailGrid.addWidget(form.create_label("Username:"),    1, 2, 1, 1);  detailGrid.addWidget(fld_user,     1, 3, 1, 1);
+    detailGrid.addWidget(form.create_label("Domain:"),      2, 0, 1, 1);  detailGrid.addWidget(fld_domain,   2, 1, 1, 1);
+    detailGrid.addWidget(form.create_label("Arch:"),        2, 2, 1, 1);  detailGrid.addWidget(fld_arch,     2, 3, 1, 1);
+    detailGrid.addWidget(form.create_label("PID / TID:"),   3, 0, 1, 1);  detailGrid.addWidget(fld_pid,      3, 1, 1, 1);
+    detailGrid.addWidget(form.create_label("Process:"),     3, 2, 1, 1);  detailGrid.addWidget(fld_process,  3, 3, 1, 1);
+    detailGrid.addWidget(form.create_label("Internal IP:"), 4, 0, 1, 1);  detailGrid.addWidget(fld_ip,       4, 1, 1, 1);
+    detailGrid.addWidget(form.create_label("OS:"),          4, 2, 1, 1);  detailGrid.addWidget(fld_os,       4, 3, 1, 1);
+    detailGrid.addWidget(form.create_label("Elevated:"),    5, 0, 1, 1);  detailGrid.addWidget(fld_elevated, 5, 1, 1, 1);
+    detailGrid.addWidget(form.create_label("Sleep:"),       5, 2, 1, 1);  detailGrid.addWidget(fld_sleep,    5, 3, 1, 1);
+    detailGrid.addWidget(form.create_label("Profile:"),     6, 0, 1, 1);  detailGrid.addWidget(fld_profile,  6, 1, 1, 3);
+
+    let detailPanel = form.create_panel();
+    detailPanel.setLayout(detailGrid);
+    let grpDetails = form.create_groupbox("Agent Details", false);
+    grpDetails.setPanel(detailPanel);
+
+    let btnDelete  = form.create_button("Delete Selected");
+    let btnRefresh = form.create_button("Refresh");
+    let btnClear   = form.create_button("Clear All");
+
+    form.connect(btnDelete, "clicked", function() {
+        let agentId = selectedAgentId();
+        if (agentId === "") {
+            ax.show_message("Delete", "Select an agent first.");
+            return;
+        }
+        ax.service_command("nax_store", "delete", { agent_id: agentId });
+    });
+
+    form.connect(btnRefresh, "clicked", function() {
+        refreshList();
+    });
+
+    form.connect(btnClear, "clicked", function() {
+        let ok = ax.prompt_confirm("Clear Store", "Delete ALL entries from the persistence store?");
+        if (ok) {
+            ax.service_command("nax_store", "clear", null);
+        }
+    });
+
+    let buttonRow = form.create_hlayout();
+    buttonRow.addWidget(btnDelete);
+    buttonRow.addWidget(btnRefresh);
+    buttonRow.addWidget(btnClear);
+
+    let buttonPanel = form.create_panel();
+    buttonPanel.setLayout(buttonRow);
+
+    let layout = form.create_vlayout();
+    layout.addWidget(grpSelect);
+    layout.addWidget(grpDetails);
+    layout.addWidget(buttonPanel);
+
+    let dialog = form.create_ext_dialog("NaX Store Manager");
+    dialog.setSize(720, 500);
+    dialog.setLayout(layout);
 }
 
 function refreshList() {
@@ -138,120 +229,4 @@ function data_handler(data) {
     }
 }
 
-function openStoreDialog() {
-    let combo = form.create_combo();
-    g_combo = combo;
-
-    let lblCount = form.create_label("Entries: -");
-    g_count_lbl = lblCount;
-
-    form.connect(combo, "currentIndexChanged", function() {
-        let agentId = selectedAgentId();
-        if (agentId !== "") {
-            ax.service_command("nax_store", "details", { agent_id: agentId });
-        }
-    });
-
-    let fld_id       = form.create_textline(""); fld_id.setReadOnly(true);       g_fld_id = fld_id;
-    let fld_computer = form.create_textline(""); fld_computer.setReadOnly(true); g_fld_computer = fld_computer;
-    let fld_user     = form.create_textline(""); fld_user.setReadOnly(true);     g_fld_user = fld_user;
-    let fld_domain   = form.create_textline(""); fld_domain.setReadOnly(true);   g_fld_domain = fld_domain;
-    let fld_arch     = form.create_textline(""); fld_arch.setReadOnly(true);     g_fld_arch = fld_arch;
-    let fld_pid      = form.create_textline(""); fld_pid.setReadOnly(true);      g_fld_pid = fld_pid;
-    let fld_process  = form.create_textline(""); fld_process.setReadOnly(true);  g_fld_process = fld_process;
-    let fld_ip       = form.create_textline(""); fld_ip.setReadOnly(true);       g_fld_ip = fld_ip;
-    let fld_os       = form.create_textline(""); fld_os.setReadOnly(true);       g_fld_os = fld_os;
-    let fld_elevated = form.create_textline(""); fld_elevated.setReadOnly(true); g_fld_elevated = fld_elevated;
-    let fld_sleep    = form.create_textline(""); fld_sleep.setReadOnly(true);    g_fld_sleep = fld_sleep;
-    let fld_profile  = form.create_textline(""); fld_profile.setReadOnly(true);  g_fld_profile = fld_profile;
-
-    let selectGrid = form.create_gridlayout();
-    selectGrid.addWidget(form.create_label("Agent:"), 0, 0, 1, 1);
-    selectGrid.addWidget(combo,                       0, 1, 1, 3);
-    selectGrid.addWidget(lblCount,                    1, 0, 1, 1);
-
-    let selectPanel = form.create_panel();
-    selectPanel.setLayout(selectGrid);
-    let grpSelect = form.create_groupbox("Select Agent", false);
-    grpSelect.setPanel(selectPanel);
-
-    let detailGrid = form.create_gridlayout();
-    detailGrid.addWidget(form.create_label("Agent ID:"),    0, 0, 1, 1);  detailGrid.addWidget(fld_id,       0, 1, 1, 3);
-    detailGrid.addWidget(form.create_label("Computer:"),    1, 0, 1, 1);  detailGrid.addWidget(fld_computer, 1, 1, 1, 1);
-    detailGrid.addWidget(form.create_label("Username:"),    1, 2, 1, 1);  detailGrid.addWidget(fld_user,     1, 3, 1, 1);
-    detailGrid.addWidget(form.create_label("Domain:"),      2, 0, 1, 1);  detailGrid.addWidget(fld_domain,   2, 1, 1, 1);
-    detailGrid.addWidget(form.create_label("Arch:"),        2, 2, 1, 1);  detailGrid.addWidget(fld_arch,     2, 3, 1, 1);
-    detailGrid.addWidget(form.create_label("PID / TID:"),   3, 0, 1, 1);  detailGrid.addWidget(fld_pid,      3, 1, 1, 1);
-    detailGrid.addWidget(form.create_label("Process:"),     3, 2, 1, 1);  detailGrid.addWidget(fld_process,  3, 3, 1, 1);
-    detailGrid.addWidget(form.create_label("Internal IP:"), 4, 0, 1, 1);  detailGrid.addWidget(fld_ip,       4, 1, 1, 1);
-    detailGrid.addWidget(form.create_label("OS:"),          4, 2, 1, 1);  detailGrid.addWidget(fld_os,       4, 3, 1, 1);
-    detailGrid.addWidget(form.create_label("Elevated:"),    5, 0, 1, 1);  detailGrid.addWidget(fld_elevated, 5, 1, 1, 1);
-    detailGrid.addWidget(form.create_label("Sleep:"),       5, 2, 1, 1);  detailGrid.addWidget(fld_sleep,    5, 3, 1, 1);
-    detailGrid.addWidget(form.create_label("Profile:"),     6, 0, 1, 1);  detailGrid.addWidget(fld_profile,  6, 1, 1, 3);
-
-    let detailPanel = form.create_panel();
-    detailPanel.setLayout(detailGrid);
-    let grpDetails = form.create_groupbox("Agent Details", false);
-    grpDetails.setPanel(detailPanel);
-
-    let btnDelete  = form.create_button("Delete Selected");
-    let btnRefresh = form.create_button("Refresh");
-    let btnClear   = form.create_button("Clear All");
-
-    form.connect(btnDelete, "clicked", function() {
-        let agentId = selectedAgentId();
-        if (agentId === "") {
-            ax.show_message("Delete", "Select an agent first.");
-            return;
-        }
-        ax.service_command("nax_store", "delete", { agent_id: agentId });
-    });
-
-    form.connect(btnRefresh, "clicked", function() {
-        refreshList();
-    });
-
-    form.connect(btnClear, "clicked", function() {
-        let ok = ax.prompt_confirm("Clear Store", "Delete ALL entries from the persistence store?");
-        if (ok) {
-            ax.service_command("nax_store", "clear", null);
-        }
-    });
-
-    let buttonRow = form.create_hlayout();
-    buttonRow.addWidget(btnDelete);
-    buttonRow.addWidget(btnRefresh);
-    buttonRow.addWidget(btnClear);
-
-    let buttonPanel = form.create_panel();
-    buttonPanel.setLayout(buttonRow);
-
-    let layout = form.create_vlayout();
-    layout.addWidget(grpSelect);
-    layout.addWidget(grpDetails);
-    layout.addWidget(buttonPanel);
-
-    let dialog = form.create_dialog("NaX Store Manager");
-    dialog.setSize(720, 500);
-    dialog.setLayout(layout);
-
-    ax.service_command("nax_store", "list", null);
-
-    dialog.exec();
-
-    g_combo      = null;
-    g_count_lbl  = null;
-    g_entries    = [];
-    g_fld_id       = null;
-    g_fld_computer = null;
-    g_fld_user     = null;
-    g_fld_domain   = null;
-    g_fld_arch     = null;
-    g_fld_pid      = null;
-    g_fld_process  = null;
-    g_fld_ip       = null;
-    g_fld_os       = null;
-    g_fld_elevated = null;
-    g_fld_sleep    = null;
-    g_fld_profile  = null;
-}
+// (openStoreDialog removed — UI is built in InitService via ext_dialog)

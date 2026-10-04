@@ -1,7 +1,7 @@
 {
   "callbacks": [
     {
-      "hosts": ["192.168.77.128:8080"],
+      "hosts": ["192.168.77.128:4442", "maor.htb:443"],
       "user_agent": "Amazon CloudFront",
       "beacon_id_header": "X-Amz-Cf-Id",
       "rotation": "random",
@@ -20,10 +20,10 @@
 
       "get": {
         "uri": [
-          "/d/cf-dist/assets/main.woff2",
-          "/d/cf-dist/css/styles.min.css",
-          "/d/cf-dist/img/logo.svg",
-          "/d/cf-dist/manifest.json"
+          "/nax/d/cf-dist/assets/main.woff2",
+          "/nax/d/cf-dist/css/styles.min.css",
+          "/nax/d/cf-dist/img/logo.svg",
+          "/nax/d/cf-dist/manifest.json"
         ],
         "client": {
           "headers": {
@@ -71,9 +71,9 @@
 
       "post": {
         "uri": [
-          "/prod/api/events",
-          "/prod/api/metrics",
-          "/prod/api/logs/ingest"
+          "/nax/prod/api/events",
+          "/nax/prod/api/metrics",
+          "/nax/prod/api/logs/ingest"
         ],
         "client": {
           "headers": {

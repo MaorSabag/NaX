@@ -20,6 +20,7 @@ FUNC VOID NaxInitConfig( PNAX_INSTANCE Nax ) {
     volatile BYTE *k = (volatile BYTE *)Nax->Config.AesKey;
     NAX_AES_KEY_WRITE( k );
 
+    /* chunked download default */
     Nax->Config.DlChunkSize = NAX_DL_CHUNK_DEFAULT;
 
     /* listener watermark - used in SMB beat for pivot routing */
@@ -83,7 +84,7 @@ FUNC VOID NaxInitConfig( PNAX_INSTANCE Nax ) {
 #ifndef NAX_DEFAULT_SLEEP_OBF
 #define NAX_DEFAULT_SLEEP_OBF 1
 #endif
-    Nax->SmInfo.Config.SleepObf = NAX_DEFAULT_SLEEP_OBF;
+    Nax->SmInfo.Config.SleepObf   = NAX_DEFAULT_SLEEP_OBF;
 }
 
 #if NAX_TRANSPORT_PROFILE != NAX_TRANSPORT_SMB

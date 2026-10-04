@@ -3,28 +3,36 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
+
+	"nonameax/naxwire"
 )
 
-func saveProfileToStore(agentId string, profile *ProfileConfig) error {
+func saveProfileToStore(agentId int64, profile *naxwire.ProfileConfig) error {
 	if Ts == nil {
 		return fmt.Errorf("teamserver not available")
 	}
+	beaconID := ""
+	if v, ok := agentIdToBeaconId.Load(agentId); ok {
+		beaconID = v.(string)
+	}
 	data, err := json.Marshal(map[string]any{
+		"beacon_id":        beaconID,
 		"beacon_id_header": profile.BeaconIdHeader,
 		"profile":          profile,
 	})
 	if err != nil {
 		return err
 	}
-	return Ts.TsExtenderDataSave(extenderNameProfiles, agentId, data)
+	return Ts.TsExtenderDataSave(extenderNameProfiles, strconv.FormatInt(agentId, 10), data)
 }
 
-func removeProfileFromStore(agentId string) {
+func removeProfileFromStore(agentId int64) {
 	if Ts == nil {
 		return
 	}
-	if err := Ts.TsExtenderDataDelete(extenderNameProfiles, agentId); err != nil {
+	if err := Ts.TsExtenderDataDelete(extenderNameProfiles, strconv.FormatInt(agentId, 10)); err != nil {
 		naxLogErr("removeProfileFromStore: %v", err)
 	}
 }
@@ -34,10 +42,10 @@ func removeProfileFromStore(agentId string) {
 // parseProfileFromListenerConfig builds a ProfileConfig from the listener config
 // JSON (map[string]any). This is a copy of the listener's parseProfileConfig -
 // the two plugins are separate .so files so they cannot share code (ADR-002).
-func parseProfileFromListenerConfig(cfg map[string]any) *ProfileConfig {
-	p := &ProfileConfig{
+func parseProfileFromListenerConfig(cfg map[string]any) *naxwire.ProfileConfig {
+	p := &naxwire.ProfileConfig{
 		Rotation: "sequential",
-		Error: ServerError{
+		Error: naxwire.ServerError{
 			Status:  404,
 			Body:    "<!DOCTYPE html>\n<html><body><h1>404</h1></body></html>\n",
 			Headers: map[string]string{"Content-Type": "text/html"},
@@ -50,7 +58,7 @@ func parseProfileFromListenerConfig(cfg map[string]any) *ProfileConfig {
 		if err := json.Unmarshal([]byte(jsonStr), &parsed); err == nil {
 			if arr, ok := parsed["callbacks"].([]any); ok && len(arr) > 0 {
 				if cb, ok := arr[0].(map[string]any); ok {
-					parseCallbackV2Agent(cb, p)
+					parseCallbackV2(cb, p)
 				}
 			}
 			return p
@@ -61,7 +69,7 @@ func parseProfileFromListenerConfig(cfg map[string]any) *ProfileConfig {
 	if raw, ok := cfg["callbacks"]; ok {
 		if arr, ok := raw.([]any); ok && len(arr) > 0 {
 			if cb, ok := arr[0].(map[string]any); ok {
-				parseCallbackV2Agent(cb, p)
+				parseCallbackV2(cb, p)
 			}
 		}
 		return p
@@ -101,6 +109,7 @@ func parseProfileFromListenerConfig(cfg map[string]any) *ProfileConfig {
 		}
 	}
 
+	// Extra headers -> GET client headers
 	if raw, ok := cfg["extra_headers"].([]any); ok && len(raw) > 0 {
 		p.Get.ClientHeaders = map[string]string{}
 		for _, u := range raw {
@@ -112,17 +121,18 @@ func parseProfileFromListenerConfig(cfg map[string]any) *ProfileConfig {
 		}
 	}
 
+	// Cookie name -> GET client meta as cookie
 	cookieName := "__session"
 	if cn, ok := cfg["cookie_name"].(string); ok && cn != "" {
 		cookieName = cn
 	}
-	p.Get.ClientMeta = OutputConfig{Format: "base64", Placement: "cookie", Name: cookieName}
+	p.Get.ClientMeta = naxwire.OutputConfig{Format: "base64", Placement: "cookie", Name: cookieName}
 
 	// POST defaults
-	p.Post.ClientMeta = OutputConfig{Format: "raw", Placement: "header", Name: "X-Beacon-Id"}
-	p.Post.ClientOutput = &OutputConfig{Format: "raw", Placement: "body"}
-	p.Post.ServerOutput = OutputConfig{Format: "raw", Placement: "body"}
-	p.Get.ServerOutput = OutputConfig{Format: "raw", Placement: "body"}
+	p.Post.ClientMeta = naxwire.OutputConfig{Format: "raw", Placement: "header", Name: "X-Beacon-Id"}
+	p.Post.ClientOutput = &naxwire.OutputConfig{Format: "raw", Placement: "body"}
+	p.Post.ServerOutput = naxwire.OutputConfig{Format: "raw", Placement: "body"}
+	p.Get.ServerOutput = naxwire.OutputConfig{Format: "raw", Placement: "body"}
 
 	// Server response headers
 	p.Get.ServerHeaders = map[string]string{"Content-Type": "application/octet-stream", "Connection": "keep-alive"}
@@ -136,7 +146,7 @@ func parseProfileFromListenerConfig(cfg map[string]any) *ProfileConfig {
 	return p
 }
 
-func parseCallbackV2Agent(cb map[string]any, p *ProfileConfig) {
+func parseCallbackV2(cb map[string]any, p *naxwire.ProfileConfig) {
 	if raw, ok := cb["hosts"].([]any); ok {
 		for _, h := range raw {
 			if s, ok := h.(string); ok && s != "" {
@@ -174,14 +184,14 @@ func parseCallbackV2Agent(cb map[string]any, p *ProfileConfig) {
 		}
 	}
 	if get, ok := cb["get"].(map[string]any); ok {
-		parseHTTPTransactionV2Agent(get, &p.Get, false)
+		parseHTTPTransactionV2(get, &p.Get, false)
 	}
 	if post, ok := cb["post"].(map[string]any); ok {
-		parseHTTPTransactionV2Agent(post, &p.Post, true)
+		parseHTTPTransactionV2(post, &p.Post, true)
 	}
 }
 
-func parseHTTPTransactionV2Agent(raw map[string]any, tx *HTTPTransaction, isPost bool) {
+func parseHTTPTransactionV2(raw map[string]any, tx *naxwire.HTTPTransaction, isPost bool) {
 	uriKey := "uri"
 	if _, ok := raw[uriKey]; !ok {
 		uriKey = "uris"
@@ -208,16 +218,16 @@ func parseHTTPTransactionV2Agent(raw map[string]any, tx *HTTPTransaction, isPost
 		}
 	}
 	if meta, ok := client["metadata"].(map[string]any); ok {
-		tx.ClientMeta = parseOutputConfigV2Agent(meta)
+		tx.ClientMeta = parseOutputConfigV2(meta)
 	} else if meta, ok := raw["client_meta"].(map[string]any); ok {
-		tx.ClientMeta = parseOutputConfigV2Agent(meta)
+		tx.ClientMeta = parseOutputConfigV2(meta)
 	}
 	if isPost {
 		if out, ok := client["output"].(map[string]any); ok {
-			cfg := parseOutputConfigV2Agent(out)
+			cfg := parseOutputConfigV2(out)
 			tx.ClientOutput = &cfg
 		} else if out, ok := raw["client_output"].(map[string]any); ok {
-			cfg := parseOutputConfigV2Agent(out)
+			cfg := parseOutputConfigV2(out)
 			tx.ClientOutput = &cfg
 		}
 	}
@@ -244,14 +254,14 @@ func parseHTTPTransactionV2Agent(raw map[string]any, tx *HTTPTransaction, isPost
 		}
 	}
 	if sout, ok := server["output"].(map[string]any); ok {
-		tx.ServerOutput = parseOutputConfigV2Agent(sout)
+		tx.ServerOutput = parseOutputConfigV2(sout)
 	} else if sout, ok := raw["server_output"].(map[string]any); ok {
-		tx.ServerOutput = parseOutputConfigV2Agent(sout)
+		tx.ServerOutput = parseOutputConfigV2(sout)
 	}
 }
 
-func parseOutputConfigV2Agent(raw map[string]any) OutputConfig {
-	cfg := OutputConfig{}
+func parseOutputConfigV2(raw map[string]any) naxwire.OutputConfig {
+	cfg := naxwire.OutputConfig{}
 	if f, ok := raw["format"].(string); ok {
 		cfg.Format = f
 	}

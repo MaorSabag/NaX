@@ -13,6 +13,7 @@ typedef enum _GATE_API {
     GATE_API_WAIT_FOR_SINGLE_OBJECT    = 0x02,
     GATE_API_WAIT_FOR_MULTIPLE_OBJECTS = 0x03,
     GATE_API_VIRTUAL_PROTECT           = 0x04,
+    GATE_API_LOAD_LIBRARY_EX_W        = 0x05,
 } GATE_API;
 
 typedef struct _FUNCTION_CALL {

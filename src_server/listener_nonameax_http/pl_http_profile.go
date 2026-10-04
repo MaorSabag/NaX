@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"strings"
+
+	"nonameax/naxwire"
 )
 
 /* ========= [ Profile parsing ] ========= */
@@ -10,16 +12,17 @@ import (
 // parseProfileConfig builds a ProfileConfig from the listener config JSON.
 // Handles both the flat field format (current UI) and the v2 callbacks format
 // (future JSON import).
-func parseProfileConfig(cfg map[string]any) *ProfileConfig {
-	p := &ProfileConfig{
+func parseProfileConfig(cfg map[string]any) *naxwire.ProfileConfig {
+	p := &naxwire.ProfileConfig{
 		Rotation: "sequential",
-		Error: ServerError{
+		Error: naxwire.ServerError{
 			Status:  404,
 			Body:    "<!DOCTYPE html>\n<html><body><h1>404</h1></body></html>\n",
 			Headers: map[string]string{"Content-Type": "text/html"},
 		},
 	}
 
+	// Debug: log all config keys
 	keys := make([]string, 0, len(cfg))
 	for k := range cfg { keys = append(keys, k) }
 	naxListenerLogInfo("parseProfileConfig: keys=%v", keys)
@@ -130,14 +133,14 @@ func parseProfileConfig(cfg map[string]any) *ProfileConfig {
 		if cn, ok := cfg["cookie_name"].(string); ok && cn != "" {
 			cookieName = cn
 		}
-		p.Get.ClientMeta = OutputConfig{Format: "base64", Placement: "cookie", Name: cookieName}
+		p.Get.ClientMeta = naxwire.OutputConfig{Format: "base64", Placement: "cookie", Name: cookieName}
 	}
 
 	if p.Post.ClientMeta.Format == "" && p.Post.ClientMeta.Placement == "" {
-		p.Post.ClientMeta = OutputConfig{Format: "raw", Placement: "header", Name: "X-Beacon-Id"}
+		p.Post.ClientMeta = naxwire.OutputConfig{Format: "raw", Placement: "header", Name: "X-Beacon-Id"}
 	}
 	if p.Post.ClientOutput != nil && p.Post.ClientOutput.Format == "" && p.Post.ClientOutput.Placement == "" {
-		p.Post.ClientOutput = &OutputConfig{Format: "raw", Placement: "body"}
+		p.Post.ClientOutput = &naxwire.OutputConfig{Format: "raw", Placement: "body"}
 	}
 
 	// --- Error page ---
@@ -158,7 +161,7 @@ func parseProfileConfig(cfg map[string]any) *ProfileConfig {
 }
 
 // parseCallbackV2 populates a ProfileConfig from a v2 callbacks JSON object.
-func parseCallbackV2(cb map[string]any, p *ProfileConfig) {
+func parseCallbackV2(cb map[string]any, p *naxwire.ProfileConfig) {
 	if raw, ok := cb["hosts"].([]any); ok {
 		for _, h := range raw {
 			if s, ok := h.(string); ok && s != "" {
@@ -203,7 +206,7 @@ func parseCallbackV2(cb map[string]any, p *ProfileConfig) {
 	}
 }
 
-func parseHTTPTransactionV2(raw map[string]any, tx *HTTPTransaction, isPost bool) {
+func parseHTTPTransactionV2(raw map[string]any, tx *naxwire.HTTPTransaction, isPost bool) {
 	uriKey := "uri"
 	if _, ok := raw[uriKey]; !ok {
 		uriKey = "uris"
@@ -272,8 +275,8 @@ func parseHTTPTransactionV2(raw map[string]any, tx *HTTPTransaction, isPost bool
 	}
 }
 
-func parseOutputConfigV2(raw map[string]any) OutputConfig {
-	cfg := OutputConfig{}
+func parseOutputConfigV2(raw map[string]any) naxwire.OutputConfig {
+	cfg := naxwire.OutputConfig{}
 	if f, ok := raw["format"].(string); ok {
 		cfg.Format = f
 	}
@@ -298,8 +301,8 @@ func parseOutputConfigV2(raw map[string]any) OutputConfig {
 	return cfg
 }
 
-func parseFlatOutputConfig(cfg map[string]any, prefix string) OutputConfig {
-	oc := OutputConfig{}
+func parseFlatOutputConfig(cfg map[string]any, prefix string) naxwire.OutputConfig {
+	oc := naxwire.OutputConfig{}
 	if f, ok := cfg[prefix+"_format"].(string); ok {
 		oc.Format = f
 	}

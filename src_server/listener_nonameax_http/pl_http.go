@@ -17,7 +17,8 @@ import (
 	"sync"
 	"time"
 
-	adaptix "github.com/Adaptix-Framework/axc2"
+	adaptix "github.com/Adaptix-Framework/axc2/v2"
+	"nonameax/naxwire"
 )
 
 func base64Decode(s string) ([]byte, error) {
@@ -27,9 +28,31 @@ func base64Decode(s string) ([]byte, error) {
 	return base64.RawStdEncoding.DecodeString(s)
 }
 
-func naxListenerLogInfo(format string, args ...any) { fmt.Printf("[NoNameAx-HTTP] [*] "+format+"\n", args...) }
-func naxListenerLogOk(format string, args ...any)   { fmt.Printf("[NoNameAx-HTTP] [+] "+format+"\n", args...) }
-func naxListenerLogErr(format string, args ...any)   { fmt.Printf("[NoNameAx-HTTP] [-] "+format+"\n", args...) }
+const naxListenerLogSource = "NoNameAx-HTTP"
+
+func naxListenerLogInfo(format string, args ...any) {
+	if Ts != nil {
+		Ts.TsLogAdd(adaptix.LogStatusInfo, 1, naxListenerLogSource, "", format, args...)
+	} else {
+		fmt.Printf("[NoNameAx-HTTP] [*] "+format+"\n", args...)
+	}
+}
+
+func naxListenerLogOk(format string, args ...any) {
+	if Ts != nil {
+		Ts.TsLogAdd(adaptix.LogStatusSuccess, 1, naxListenerLogSource, "", format, args...)
+	} else {
+		fmt.Printf("[NoNameAx-HTTP] [+] "+format+"\n", args...)
+	}
+}
+
+func naxListenerLogErr(format string, args ...any) {
+	if Ts != nil {
+		Ts.TsLogAdd(adaptix.LogStatusError, 0, naxListenerLogSource, "", format, args...)
+	} else {
+		fmt.Printf("[NoNameAx-HTTP] [-] "+format+"\n", args...)
+	}
+}
 
 // agentWatermark must match extender/config.yaml::agent_watermark.
 // Adaptix uses the watermark to resolve which agent plugin to dispatch
@@ -50,18 +73,18 @@ type httpServer struct {
 	hbHeader   string              // legacy header name for beaconID fallback
 	encryptKey []byte              // raw 16 bytes
 	profileRaw string
-	profile    *ProfileConfig
+	profile    *naxwire.ProfileConfig
 
 	pendingProfile sync.Map // key: beaconID, value: bool
 
 	// Per-agent profile overrides for runtime profile updates.
-	agentProfiles     sync.Map  // key: adaptixID (string), value: *ProfileConfig
-	agentPrevProfiles sync.Map  // key: adaptixID (string), value: *ProfileConfig (previous override kept for transition window)
+	agentProfiles     sync.Map  // key: beaconID (string), value: *naxwire.ProfileConfig
+	agentPrevProfiles sync.Map  // key: beaconID (string), value: *naxwire.ProfileConfig (previous override kept for transition window)
 	beaconIDHeaders   []string  // all known beacon ID header names (default + overrides)
 	profileStoreCheck time.Time // last poll time (throttled to once per 5s)
 	profileStoreRaw   sync.Map  // key: agentID, value: []byte (cached raw store data for change detection)
 
-	ts Teamserver
+	ts adaptix.Teamserver
 
 	// agentIDMap maps the 16-hex-char beaconID (from X-Beacon-Id) to the
 	// server-assigned AgentData.Id returned by TsAgentCreate.  Adaptix stores
@@ -74,7 +97,7 @@ type httpServer struct {
 	//   newAgentID := agentDataRes.Id   // server-assigned - use this
 	//
 	// See: out_source_projects/Kharon/listener_kharon_http/src_server/pl_http.go:737
-	agentIDMap sync.Map // key: beaconID (string), value: adaptixID (string)
+	agentIDMap sync.Map // key: beaconID (string), value: adaptixID (int64)
 
 	mu  sync.Mutex
 	srv *http.Server
@@ -82,7 +105,7 @@ type httpServer struct {
 
 /* ========= [ Server constructor ] ========= */
 
-func newHTTPServer(name, config string, ts Teamserver) (*httpServer, error) {
+func newHTTPServer(name, config string, ts adaptix.Teamserver) (*httpServer, error) {
 	var cfg map[string]any
 	if err := json.Unmarshal([]byte(config), &cfg); err != nil {
 		return nil, err
@@ -254,8 +277,8 @@ func (s *httpServer) stop() error {
 }
 
 func (s *httpServer) buildProfileFrame() []byte {
-	body := EncodeProfileBodyV2(s.profile)
-	return EncodeFrame(WireTypeProfile, body)
+	body := naxwire.EncodeProfileBodyV2(s.profile)
+	return naxwire.EncodeFrame(naxwire.WireTypeProfile, body)
 }
 
 // beaconHandler - profile-driven handler with OutputConfig transforms.
@@ -309,8 +332,8 @@ func (s *httpServer) rootHandler(w http.ResponseWriter, r *http.Request) {
 // specific profile's transaction config. Returns (plaintext, tx, error).
 // For POST requests, rawBody must be pre-read since http.Request.Body is
 // single-read; for GET requests rawBody is ignored.
-func (s *httpServer) tryDecodeWithProfile(r *http.Request, isGet bool, profile *ProfileConfig, rawBody []byte) ([]byte, *HTTPTransaction, error) {
-	var tx *HTTPTransaction
+func (s *httpServer) tryDecodeWithProfile(r *http.Request, isGet bool, profile *naxwire.ProfileConfig, rawBody []byte) ([]byte, *naxwire.HTTPTransaction, error) {
+	var tx *naxwire.HTTPTransaction
 	if isGet {
 		tx = &profile.Get
 	} else {
@@ -319,8 +342,11 @@ func (s *httpServer) tryDecodeWithProfile(r *http.Request, isGet bool, profile *
 
 	if isGet {
 		rawMeta, err := extractMeta(&tx.ClientMeta, r)
-		if err != nil || rawMeta == "" {
-			return nil, nil, errors.New("meta extraction failed")
+		if err != nil {
+			return nil, nil, fmt.Errorf("meta extraction failed: %w", err)
+		}
+		if rawMeta == "" {
+			return nil, nil, errors.New("meta extraction failed: empty value")
 		}
 		decoded, err := decodeClientInput(&tx.ClientMeta, []byte(rawMeta))
 		if err != nil {
@@ -331,7 +357,7 @@ func (s *httpServer) tryDecodeWithProfile(r *http.Request, isGet bool, profile *
 
 	clientOutput := tx.ClientOutput
 	if clientOutput == nil {
-		clientOutput = &OutputConfig{Format: "raw", Placement: "body"}
+		clientOutput = &naxwire.OutputConfig{Format: "raw", Placement: "body"}
 	}
 	decoded, err := decodeClientInput(clientOutput, rawBody)
 	if err != nil {
@@ -363,26 +389,20 @@ func (s *httpServer) beaconHandler(w http.ResponseWriter, r *http.Request, beaco
 	// agent hasn't applied it yet), the agent is still sending with the old
 	// profile. Keeping the previous override ensures we can decode regardless
 	// of which profile the agent is currently using.
-	profilesToTry := []*ProfileConfig{s.profile}
-	var adaptixIDForProfile string
-	if cachedID, ok := s.agentIDMap.Load(beaconID); ok {
-		adaptixIDForProfile = cachedID.(string)
+	profilesToTry := []*naxwire.ProfileConfig{s.profile}
+	var candidates []*naxwire.ProfileConfig
+	if override, ok := s.agentProfiles.Load(beaconID); ok {
+		candidates = append(candidates, override.(*naxwire.ProfileConfig))
 	}
-	if adaptixIDForProfile != "" {
-		var candidates []*ProfileConfig
-		if override, ok := s.agentProfiles.Load(adaptixIDForProfile); ok {
-			candidates = append(candidates, override.(*ProfileConfig))
-		}
-		if prev, ok := s.agentPrevProfiles.Load(adaptixIDForProfile); ok {
-			candidates = append(candidates, prev.(*ProfileConfig))
-		}
-		if len(candidates) > 0 {
-			profilesToTry = append(candidates, s.profile)
-		}
+	if prev, ok := s.agentPrevProfiles.Load(beaconID); ok {
+		candidates = append(candidates, prev.(*naxwire.ProfileConfig))
+	}
+	if len(candidates) > 0 {
+		profilesToTry = append(candidates, s.profile)
 	}
 
 	var clientData []byte
-	var tx *HTTPTransaction
+	var tx *naxwire.HTTPTransaction
 	for i, prof := range profilesToTry {
 		decoded, usedTx, err := s.tryDecodeWithProfile(r, isGet, prof, rawBody)
 		if err == nil {
@@ -403,18 +423,18 @@ func (s *httpServer) beaconHandler(w http.ResponseWriter, r *http.Request, beaco
 		naxListenerLogInfo("tryDecode[%s]: beacon=%s beaconHdr=%s postOut=%s err=%v", label, beaconID, prof.BeaconIdHeader, postOutFmt, err)
 	}
 	if clientData == nil {
-		naxListenerLogErr("beaconHandler: all profile decode attempts failed beacon=%s adaptixID=%s method=%s bodyLen=%d profiles=%d", beaconID, adaptixIDForProfile, r.Method, len(rawBody), len(profilesToTry))
+		naxListenerLogErr("beaconHandler: all profile decode attempts failed beacon=%s method=%s bodyLen=%d profiles=%d", beaconID, r.Method, len(rawBody), len(profilesToTry))
 		s.errorHandler(w, r)
 		return
 	}
 
 	// Step 3: Route the beacon using the server-assigned adaptixID, not the raw beaconID.
 	// clientData is AES-encrypted; the server's Agent.ProcessData calls Extender.Decrypt.
-	var adaptixID string
+	var adaptixID int64
 	register := false
 
 	if cachedID, ok := s.agentIDMap.Load(beaconID); ok {
-		candidate := cachedID.(string)
+		candidate := cachedID.(int64)
 		if s.ts != nil && s.ts.TsAgentIsExists(candidate) {
 			adaptixID = candidate
 			_ = s.ts.TsAgentProcessData(adaptixID, clientData)
@@ -422,35 +442,35 @@ func (s *httpServer) beaconHandler(w http.ResponseWriter, r *http.Request, beaco
 			s.agentIDMap.Delete(beaconID)
 			register = true
 		}
-	} else {
-		register = true
+	} else if s.ts != nil {
+		if id, found := s.ts.TsAgentIdByUID([]byte(beaconID)); found {
+			adaptixID = id
+			s.agentIDMap.Store(beaconID, id)
+			_ = s.ts.TsAgentProcessData(adaptixID, clientData)
+		} else {
+			register = true
+		}
 	}
 
 	if register && s.ts != nil {
-		if s.ts.TsAgentIsExists(beaconID) {
-			adaptixID = beaconID
+		remoteAddr, _, splitErr := net.SplitHostPort(r.RemoteAddr)
+		if splitErr != nil {
+			remoteAddr = r.RemoteAddr
+		}
+		beatWithId := make([]byte, 16+16+len(clientData))
+		copy(beatWithId[:16], beaconID)
+		copy(beatWithId[16:32], s.encryptKey)
+		copy(beatWithId[32:], clientData)
+		agentDataRes, err := s.ts.TsAgentCreate(agentWatermark, []byte(beaconID), beatWithId, s.name, remoteAddr, true)
+		if err == nil {
+			adaptixID = agentDataRes.Id
 			s.agentIDMap.Store(beaconID, adaptixID)
-			_ = s.ts.TsAgentProcessData(adaptixID, clientData)
-		} else {
-			remoteAddr, _, splitErr := net.SplitHostPort(r.RemoteAddr)
-			if splitErr != nil {
-				remoteAddr = r.RemoteAddr
-			}
-			beatWithId := make([]byte, 16+16+len(clientData))
-			copy(beatWithId[:16], beaconID)
-			copy(beatWithId[16:32], s.encryptKey)
-			copy(beatWithId[32:], clientData)
-			agentDataRes, err := s.ts.TsAgentCreate(agentWatermark, beaconID, beatWithId, s.name, remoteAddr, true)
-			if err == nil {
-				adaptixID = agentDataRes.Id
-				s.agentIDMap.Store(beaconID, adaptixID)
-				s.pendingProfile.Store(beaconID, true)
-			}
+			s.pendingProfile.Store(beaconID, true)
 		}
 	}
 
 	// Stamp LastTick
-	if adaptixID != "" && s.ts != nil {
+	if adaptixID != 0 && s.ts != nil {
 		_ = s.ts.TsAgentSetTick(adaptixID, s.name)
 	}
 
@@ -473,13 +493,14 @@ func (s *httpServer) beaconHandler(w http.ResponseWriter, r *http.Request, beaco
 
 // writeServerResponse encrypts payload, applies forward transforms per the
 // transaction's ServerOutput, sets server headers, and writes the response.
-func (s *httpServer) writeServerResponse(w http.ResponseWriter, tx *HTTPTransaction, payload []byte) {
+func (s *httpServer) writeServerResponse(w http.ResponseWriter, tx *naxwire.HTTPTransaction, payload []byte) {
 	encoded, err := encodeServerOutput(&tx.ServerOutput, payload)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
+	// Apply server headers from profile
 	if tx.ServerHeaders != nil {
 		for k, v := range tx.ServerHeaders {
 			w.Header().Set(k, v)
@@ -492,7 +513,7 @@ func (s *httpServer) writeServerResponse(w http.ResponseWriter, tx *HTTPTransact
 	_, _ = w.Write(encoded)
 }
 
-func (s *httpServer) writeNoTasks(w http.ResponseWriter, tx *HTTPTransaction) {
+func (s *httpServer) writeNoTasks(w http.ResponseWriter, tx *naxwire.HTTPTransaction) {
 	// If the profile defines an EmptyResp for the server output, use it.
 	if tx.ServerOutput.EmptyResp != "" {
 		if tx.ServerHeaders != nil {
@@ -509,8 +530,8 @@ func (s *httpServer) writeNoTasks(w http.ResponseWriter, tx *HTTPTransaction) {
 	}
 
 	// Default: locally-encrypted NO_TASKS frame (not routed through server PackData)
-	frame := EncodeFrame(WireTypeNoTasks, nil)
-	encrypted, err := EncryptCBCRandomIV(s.encryptKey, frame)
+	frame := naxwire.EncodeFrame(naxwire.WireTypeNoTasks, nil)
+	encrypted, err := naxwire.EncryptCBCRandomIV(s.encryptKey, frame)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -521,11 +542,11 @@ func (s *httpServer) writeNoTasks(w http.ResponseWriter, tx *HTTPTransaction) {
 // writeResponseOrNoTasks checks whether the server has any pre-packed task
 // bytes for this agent (via TsAgentGetHostedAll) and sends them encrypted.
 // Falls back to a NO_TASKS frame when nothing is queued.
-func (s *httpServer) writeResponseOrNoTasks(w http.ResponseWriter, agentId string, tx *HTTPTransaction) {
+func (s *httpServer) writeResponseOrNoTasks(w http.ResponseWriter, agentId int64, tx *naxwire.HTTPTransaction) {
 	var payload []byte
 
 	if s.ts != nil {
-		hosted, err := s.ts.TsAgentGetHostedAll(agentId, 0x12c0000)
+		hosted, _, err := s.ts.TsAgentGetHostedAll(agentId, 0x12c0000)
 		if err == nil && len(hosted) > 0 {
 			payload = hosted
 		}
@@ -539,18 +560,16 @@ func (s *httpServer) writeResponseOrNoTasks(w http.ResponseWriter, agentId strin
 	s.writeServerResponse(w, tx, payload)
 }
 
-func (s *httpServer) writeProfileResponse(w http.ResponseWriter, tx *HTTPTransaction, beaconID string) {
+func (s *httpServer) writeProfileResponse(w http.ResponseWriter, tx *naxwire.HTTPTransaction, beaconID string) {
 	var profileFrame []byte
-	if cachedID, ok := s.agentIDMap.Load(beaconID); ok {
-		if override, ok := s.agentProfiles.Load(cachedID.(string)); ok {
-			body := EncodeProfileBodyV2(override.(*ProfileConfig))
-			profileFrame = EncodeFrame(WireTypeProfile, body)
-		}
+	if override, ok := s.agentProfiles.Load(beaconID); ok {
+		body := naxwire.EncodeProfileBodyV2(override.(*naxwire.ProfileConfig))
+		profileFrame = naxwire.EncodeFrame(naxwire.WireTypeProfile, body)
 	}
 	if profileFrame == nil {
 		profileFrame = s.buildProfileFrame()
 	}
-	encrypted, err := EncryptCBCRandomIV(s.encryptKey, profileFrame)
+	encrypted, err := naxwire.EncryptCBCRandomIV(s.encryptKey, profileFrame)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return

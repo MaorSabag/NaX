@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	adaptix "github.com/Adaptix-Framework/axc2"
+	adaptix "github.com/Adaptix-Framework/axc2/v2"
 )
 
 const (
@@ -14,15 +14,8 @@ const (
 	extenderNameProfiles = "nax_profiles"
 )
 
-type Teamserver interface {
-	TsServiceSendDataClient(operator string, service string, data string)
-	TsExtenderDataLoad(extenderName string, key string) ([]byte, error)
-	TsExtenderDataDelete(extenderName string, key string) error
-	TsExtenderDataKeys(extenderName string) ([]string, error)
-}
-
 var (
-	Ts        Teamserver
+	Ts        adaptix.Teamserver
 	ModuleDir string
 )
 
@@ -70,21 +63,32 @@ type cachedAgentIdentity struct {
 func sendJSON(operator string, v any) {
 	data, err := json.Marshal(v)
 	if err != nil {
-		fmt.Printf("[nax_store] JSON marshal failure: %v\n", err)
+		if Ts != nil {
+			Ts.TsLogAdd(adaptix.LogStatusError, 0, "nax_store", "", "JSON marshal failure: %v", err)
+		}
 		return
 	}
-	Ts.TsServiceSendDataClient(operator, "nax_store", string(data))
+	Ts.TsPluginServiceSendDataClient(operator, "nax_store", string(data))
 }
 
 func InitPlugin(ts any, moduleDir string, serviceConfig string) adaptix.PluginService {
-	Ts = ts.(Teamserver)
+	Ts = ts.(adaptix.Teamserver)
 	ModuleDir = moduleDir
-	fmt.Println("[nax_store] InitPlugin → service registered")
+	if Ts != nil {
+		Ts.TsLogAdd(adaptix.LogStatusSuccess, 1, "nax_store", "", "InitPlugin → service registered")
+	}
 	return &PluginService{}
 }
 
+func (p *PluginService) CallRPC(operator string, function string, args string) (string, error) {
+	p.Call(operator, function, args)
+	return "", nil
+}
+
 func (p *PluginService) Call(operator string, function string, args string) {
-	fmt.Printf("[nax_store] RPC: operator=%q function=%q\n", operator, function)
+	if Ts != nil {
+		Ts.TsLogAdd(adaptix.LogStatusInfo, 1, "nax_store", "", "RPC: operator=%q function=%q", operator, function)
+	}
 
 	switch strings.ToLower(function) {
 	case "list":
@@ -290,7 +294,9 @@ func handleDelete(operator string, args string) {
 	_ = Ts.TsExtenderDataDelete(extenderNameAgents, req.AgentID)
 	_ = Ts.TsExtenderDataDelete(extenderNameProfiles, req.AgentID)
 
-	fmt.Printf("[nax_store] Deleted store entry: %s\n", req.AgentID)
+	if Ts != nil {
+		Ts.TsLogAdd(adaptix.LogStatusInfo, 1, "nax_store", "", "Deleted store entry: %s", req.AgentID)
+	}
 	sendJSON(operator, resultResponse{
 		Action:  "delete_result",
 		Success: true,
@@ -313,7 +319,9 @@ func handleClear(operator string) {
 		}
 	}
 
-	fmt.Printf("[nax_store] Cleared %d store entries\n", count)
+	if Ts != nil {
+		Ts.TsLogAdd(adaptix.LogStatusInfo, 1, "nax_store", "", "Cleared %d store entries", count)
+	}
 	sendJSON(operator, resultResponse{
 		Action:  "clear_result",
 		Success: true,

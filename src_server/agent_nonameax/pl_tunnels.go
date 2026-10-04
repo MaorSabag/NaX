@@ -3,40 +3,37 @@ package main
 import (
 	"encoding/binary"
 
-	adaptix "github.com/Adaptix-Framework/axc2"
+	adaptix "github.com/Adaptix-Framework/axc2/v2"
 )
 
 /* ========= [ tunnel wire constants ] ========= */
 
 const (
-	cmdTunnelConnectTCP byte = 0x3E
-	cmdTunnelWriteTCP   byte = 0x40
-	cmdTunnelClose      byte = 0x42
-	cmdTunnelReverse    byte = 0x43
-	cmdTunnelAccept     byte = 0x44
-	cmdTunnelPause      byte = 0x45
-	cmdTunnelResume     byte = 0x46
+	tunnelCmdConnectTCP byte = 0x3E
+	tunnelCmdWriteTCP   byte = 0x40
+	tunnelCmdClose      byte = 0x42
+	tunnelCmdReverse    byte = 0x43
+	tunnelCmdAccept     byte = 0x44
+	tunnelCmdPause      byte = 0x45
+	tunnelCmdResume     byte = 0x46
+	tunnelCmdBindReply  byte = 0x48
 
 	STATUS_TUNNEL byte = 0x20
 )
 
 /* ========= [ task builder ] ========= */
 
-func tunnelTask(cmdId byte, args []byte) adaptix.TaskData {
+func tunnelTask(cmdId byte, args []byte, prio uint) adaptix.TaskData {
 	buf := make([]byte, 5+len(args))
 	buf[0] = cmdId
 	binary.LittleEndian.PutUint32(buf[1:5], uint32(len(args)))
 	copy(buf[5:], args)
-	return adaptix.TaskData{
-		Type: adaptix.TASK_TYPE_PROXY_DATA,
-		Data: buf,
-		Sync: false,
-	}
+	return adaptix.MakeProxyTask(buf, prio)
 }
 
 /* ========= [ TunnelCallbacks ] ========= */
 
-func tunnelConnectTCP(channelId, tunnelType, addressType int, address string, port int) adaptix.TaskData {
+func tunnelConnectTCP(channelId int64, tunnelType, addressType int, address string, port int) adaptix.TaskData {
 	addrBytes := []byte(address)
 	args := make([]byte, 4+4+4+len(addrBytes)+4)
 	binary.LittleEndian.PutUint32(args[0:4], uint32(channelId))
@@ -44,53 +41,64 @@ func tunnelConnectTCP(channelId, tunnelType, addressType int, address string, po
 	binary.LittleEndian.PutUint32(args[8:12], uint32(len(addrBytes)))
 	copy(args[12:12+len(addrBytes)], addrBytes)
 	binary.LittleEndian.PutUint32(args[12+len(addrBytes):], uint32(port))
-	return tunnelTask(cmdTunnelConnectTCP, args)
+	return tunnelTask(tunnelCmdConnectTCP, args, priorityTunnelCreate)
 }
 
-func tunnelConnectUDP(channelId, tunnelType, addressType int, address string, port int) adaptix.TaskData {
+func tunnelConnectUDP(channelId int64, tunnelType, addressType int, address string, port int) adaptix.TaskData {
 	return adaptix.TaskData{}
 }
 
-func tunnelWriteTCP(channelId int, data []byte) adaptix.TaskData {
+func tunnelBindTCP(channelId int64, addressType int, address string, port int) adaptix.TaskData {
+	addrBytes := []byte(address)
+	args := make([]byte, 4+4+4+len(addrBytes)+4)
+	binary.LittleEndian.PutUint32(args[0:4], uint32(channelId))
+	binary.LittleEndian.PutUint32(args[4:8], uint32(adaptix.TUNNEL_TYPE_SOCKS_BIND))
+	binary.LittleEndian.PutUint32(args[8:12], uint32(len(addrBytes)))
+	copy(args[12:12+len(addrBytes)], addrBytes)
+	binary.LittleEndian.PutUint32(args[12+len(addrBytes):], uint32(port))
+	return tunnelTask(tunnelCmdConnectTCP, args, priorityTunnelCreate)
+}
+
+func tunnelWriteTCP(channelId int64, data []byte) adaptix.TaskData {
 	args := make([]byte, 4+4+len(data))
 	binary.LittleEndian.PutUint32(args[0:4], uint32(channelId))
 	binary.LittleEndian.PutUint32(args[4:8], uint32(len(data)))
 	copy(args[8:], data)
-	return tunnelTask(cmdTunnelWriteTCP, args)
+	return tunnelTask(tunnelCmdWriteTCP, args, priorityTunnelData)
 }
 
-func tunnelWriteUDP(channelId int, data []byte) adaptix.TaskData {
+func tunnelWriteUDP(channelId int64, data []byte) adaptix.TaskData {
 	return adaptix.TaskData{}
 }
 
-func tunnelPause(channelId int) adaptix.TaskData {
+func tunnelPause(channelId int64) adaptix.TaskData {
 	args := make([]byte, 4)
 	binary.LittleEndian.PutUint32(args[0:4], uint32(channelId))
-	return tunnelTask(cmdTunnelPause, args)
+	return tunnelTask(tunnelCmdPause, args, priorityTunnelCreate)
 }
 
-func tunnelResume(channelId int) adaptix.TaskData {
+func tunnelResume(channelId int64) adaptix.TaskData {
 	args := make([]byte, 4)
 	binary.LittleEndian.PutUint32(args[0:4], uint32(channelId))
-	return tunnelTask(cmdTunnelResume, args)
+	return tunnelTask(tunnelCmdResume, args, priorityTunnelCreate)
 }
 
-func tunnelClose(channelId int) adaptix.TaskData {
+func tunnelClose(channelId int64) adaptix.TaskData {
 	args := make([]byte, 4)
 	binary.LittleEndian.PutUint32(args[0:4], uint32(channelId))
-	return tunnelTask(cmdTunnelClose, args)
+	return tunnelTask(tunnelCmdClose, args, priorityTunnelClose)
 }
 
-func tunnelReverse(tunnelId, port int) adaptix.TaskData {
+func tunnelReverse(tunnelId int64, port int) adaptix.TaskData {
 	args := make([]byte, 8)
 	binary.LittleEndian.PutUint32(args[0:4], uint32(tunnelId))
 	binary.LittleEndian.PutUint32(args[4:8], uint32(port))
-	return tunnelTask(cmdTunnelReverse, args)
+	return tunnelTask(tunnelCmdReverse, args, priorityTunnelCreate)
 }
 
 /* ========= [ result parser ] ========= */
 
-func processTunnelResult(agentId string, data []byte) {
+func processTunnelResult(agentId int64, data []byte) {
 	off := 0
 	for off+8 <= len(data) {
 		entryLen := int(binary.LittleEndian.Uint32(data[off : off+4]))
@@ -102,11 +110,11 @@ func processTunnelResult(agentId string, data []byte) {
 
 		switch byte(cmdId) {
 
-		case cmdTunnelConnectTCP:
+		case tunnelCmdConnectTCP:
 			if len(payload) < 12 {
 				break
 			}
-			channelId := int(binary.LittleEndian.Uint32(payload[0:4]))
+			channelId := int64(binary.LittleEndian.Uint32(payload[0:4]))
 			result := binary.LittleEndian.Uint32(payload[8:12])
 			if Ts != nil {
 				if result == 0 {
@@ -116,11 +124,11 @@ func processTunnelResult(agentId string, data []byte) {
 				}
 			}
 
-		case cmdTunnelWriteTCP:
+		case tunnelCmdWriteTCP:
 			if len(payload) < 8 {
 				break
 			}
-			channelId := int(binary.LittleEndian.Uint32(payload[0:4]))
+			channelId := int64(binary.LittleEndian.Uint32(payload[0:4]))
 			dataLen := int(binary.LittleEndian.Uint32(payload[4:8]))
 			if len(payload) < 8+dataLen {
 				break
@@ -129,51 +137,68 @@ func processTunnelResult(agentId string, data []byte) {
 				Ts.TsTunnelConnectionData(channelId, payload[8:8+dataLen])
 			}
 
-		case cmdTunnelClose:
+		case tunnelCmdClose:
 			if len(payload) < 12 {
 				break
 			}
-			channelId := int(binary.LittleEndian.Uint32(payload[0:4]))
+			channelId := int64(binary.LittleEndian.Uint32(payload[0:4]))
 			if Ts != nil {
 				Ts.TsTunnelConnectionClose(channelId, false)
 			}
 
-		case cmdTunnelReverse:
+		case tunnelCmdReverse:
 			if len(payload) < 12 {
 				break
 			}
-			tunnelId := int(binary.LittleEndian.Uint32(payload[0:4]))
+			tunnelId := int64(binary.LittleEndian.Uint32(payload[0:4]))
 			result := binary.LittleEndian.Uint32(payload[8:12])
 			if Ts != nil {
 				Ts.TsTunnelUpdateRportfwd(tunnelId, result != 0)
 			}
 
-		case cmdTunnelAccept:
+		case tunnelCmdAccept:
 			if len(payload) < 8 {
 				break
 			}
-			tunnelId := int(binary.LittleEndian.Uint32(payload[0:4]))
-			newChannelId := int(binary.LittleEndian.Uint32(payload[4:8]))
+			tunnelId := int64(binary.LittleEndian.Uint32(payload[0:4]))
+			newChannelId := int64(binary.LittleEndian.Uint32(payload[4:8]))
 			if Ts != nil {
 				Ts.TsTunnelConnectionAccept(tunnelId, newChannelId)
 			}
 
-		case cmdTunnelPause:
+		case tunnelCmdPause:
 			if len(payload) < 4 {
 				break
 			}
-			channelId := int(binary.LittleEndian.Uint32(payload[0:4]))
+			channelId := int64(binary.LittleEndian.Uint32(payload[0:4]))
 			if Ts != nil {
 				Ts.TsTunnelPause(channelId)
 			}
 
-		case cmdTunnelResume:
+		case tunnelCmdResume:
 			if len(payload) < 4 {
 				break
 			}
-			channelId := int(binary.LittleEndian.Uint32(payload[0:4]))
+			channelId := int64(binary.LittleEndian.Uint32(payload[0:4]))
 			if Ts != nil {
 				Ts.TsTunnelResume(channelId)
+			}
+
+		case tunnelCmdBindReply:
+			if len(payload) < 16 {
+				break
+			}
+			channelId := int64(binary.LittleEndian.Uint32(payload[0:4]))
+			phase := int(binary.LittleEndian.Uint32(payload[4:8]))
+			atyp := int(binary.LittleEndian.Uint32(payload[8:12]))
+			addrLen := int(binary.LittleEndian.Uint32(payload[12:16]))
+			if len(payload) < 16+addrLen+4 {
+				break
+			}
+			addr := payload[16 : 16+addrLen]
+			port := int(binary.LittleEndian.Uint32(payload[16+addrLen : 16+addrLen+4]))
+			if Ts != nil {
+				Ts.TsTunnelConnectionBindReply(channelId, phase, atyp, addr, port)
 			}
 
 		default:

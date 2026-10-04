@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
+	"nonameax/naxwire"
 )
 
 /* ========= [ Transform functions ] ========= */
@@ -76,7 +78,7 @@ func formatDecode(format string, data []byte) ([]byte, error) {
 // encodeServerOutput applies forward transforms to pre-encrypted data:
 // mask -> encode -> prepend/append.  AES encryption is handled by the agent
 // plugin's Encrypt (called in PackData), NOT here.
-func encodeServerOutput(cfg *OutputConfig, data []byte) ([]byte, error) {
+func encodeServerOutput(cfg *naxwire.OutputConfig, data []byte) ([]byte, error) {
 	if cfg.Mask {
 		data = xorMask(data)
 	}
@@ -101,7 +103,7 @@ func encodeServerOutput(cfg *OutputConfig, data []byte) ([]byte, error) {
 // decodeClientInput reverses profile-level transforms:
 // strip prepend/append -> decode -> unmask.  AES decryption is handled by the
 // agent plugin's Decrypt (called by the server in Agent.ProcessData), NOT here.
-func decodeClientInput(cfg *OutputConfig, encoded []byte) ([]byte, error) {
+func decodeClientInput(cfg *naxwire.OutputConfig, encoded []byte) ([]byte, error) {
 	data := encoded
 
 	// Strip prepend/append
@@ -147,7 +149,7 @@ func decodeClientInput(cfg *OutputConfig, encoded []byte) ([]byte, error) {
 
 // extractMeta reads the session ID (beaconID) from the location specified
 // by the OutputConfig placement. Returns the raw (still-encoded) value.
-func extractMeta(cfg *OutputConfig, r *http.Request) (string, error) {
+func extractMeta(cfg *naxwire.OutputConfig, r *http.Request) (string, error) {
 	switch cfg.Placement {
 	case "header":
 		val := r.Header.Get(cfg.Name)
@@ -176,7 +178,7 @@ func extractMeta(cfg *OutputConfig, r *http.Request) (string, error) {
 
 // extractClientOutput reads the client data payload from the POST request
 // based on the OutputConfig placement.
-func extractClientOutput(cfg *OutputConfig, r *http.Request) ([]byte, error) {
+func extractClientOutput(cfg *naxwire.OutputConfig, r *http.Request) ([]byte, error) {
 	switch cfg.Placement {
 	case "body":
 		return io.ReadAll(http.MaxBytesReader(nil, r.Body, 32<<20))
@@ -206,7 +208,7 @@ func extractClientOutput(cfg *OutputConfig, r *http.Request) ([]byte, error) {
 // decodeMetaToBeaconID decodes the raw meta value into a beaconID string.
 // For most formats this means format-decode then take the hex string;
 // for "raw" format the value is already the beaconID string.
-func decodeMetaToBeaconID(cfg *OutputConfig, rawMeta string) (string, error) {
+func decodeMetaToBeaconID(cfg *naxwire.OutputConfig, rawMeta string) (string, error) {
 	if cfg.Format == "raw" || cfg.Format == "" {
 		return rawMeta, nil
 	}

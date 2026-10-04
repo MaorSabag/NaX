@@ -3,7 +3,10 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"time"
+
+	"nonameax/naxwire"
 )
 
 /* ========= [ Per-agent profile overrides ] ========= */
@@ -27,54 +30,82 @@ func (s *httpServer) loadProfileOverrides() {
 }
 
 // loadProfileFromStore reads a single agent's profile override from the store.
-// Returns true if the profile was new or changed.
-func (s *httpServer) loadProfileFromStore(agentID string) bool {
+// Returns the resolved beaconID (empty if failed) and whether the profile changed.
+func (s *httpServer) loadProfileFromStore(agentID string) (string, bool) {
 	if s.ts == nil {
-		return false
+		return "", false
 	}
 	raw, err := s.ts.TsExtenderDataLoad(extenderNameProfiles, agentID)
 	if err != nil || len(raw) == 0 {
-		return false
+		return "", false
 	}
-	if prev, ok := s.profileStoreRaw.Load(agentID); ok && bytes.Equal(prev.([]byte), raw) {
-		return false
-	}
-	s.profileStoreRaw.Store(agentID, raw)
 	var wrapper struct {
+		BeaconID       string         `json:"beacon_id"`
 		BeaconIdHeader string         `json:"beacon_id_header"`
 		Profile        map[string]any `json:"profile"`
 	}
 	if err := json.Unmarshal(raw, &wrapper); err != nil {
 		naxListenerLogErr("loadProfileFromStore: parse agent %s: %v", agentID, err)
-		return false
+		return "", false
 	}
 	if wrapper.Profile == nil {
-		return false
+		return "", false
 	}
+
+	mapKey := wrapper.BeaconID
+	if mapKey == "" {
+		s.agentIDMap.Range(func(k, v any) bool {
+			if fmt.Sprintf("%d", v.(int64)) == agentID {
+				mapKey = k.(string)
+				return false
+			}
+			return true
+		})
+	}
+	if mapKey == "" && s.ts != nil {
+		var agentInt int64
+		if _, err := fmt.Sscanf(agentID, "%d", &agentInt); err == nil {
+			if ad, ok := s.ts.TsAgentGetById(agentInt); ok && len(ad.UID) > 0 {
+				mapKey = string(ad.UID)
+			} else if !ok {
+				return "", false
+			}
+		}
+	}
+	if mapKey == "" {
+		naxListenerLogErr("loadProfileFromStore: cannot resolve beaconID for agent %s, skipping", agentID)
+		return "", false
+	}
+
+	if prev, ok := s.profileStoreRaw.Load(agentID); ok && bytes.Equal(prev.([]byte), raw) {
+		return mapKey, false
+	}
+	s.profileStoreRaw.Store(agentID, raw)
+
 	profCfg := parseProfileFromStoreEntry(wrapper.Profile, wrapper.BeaconIdHeader)
-	if existing, ok := s.agentProfiles.Load(agentID); ok {
-		s.agentPrevProfiles.Store(agentID, existing)
-		naxListenerLogOk("updated profile override for agent %s (beacon_id_header=%s), previous preserved", agentID, profCfg.BeaconIdHeader)
+	if existing, ok := s.agentProfiles.Load(mapKey); ok {
+		s.agentPrevProfiles.Store(mapKey, existing)
+		naxListenerLogOk("updated profile override for beacon %s (beacon_id_header=%s), previous preserved", mapKey, profCfg.BeaconIdHeader)
 	} else {
-		naxListenerLogOk("loaded profile override for agent %s (beacon_id_header=%s)", agentID, profCfg.BeaconIdHeader)
+		naxListenerLogOk("loaded profile override for beacon %s (beacon_id_header=%s)", mapKey, profCfg.BeaconIdHeader)
 	}
-	s.agentProfiles.Store(agentID, profCfg)
-	return true
+	s.agentProfiles.Store(mapKey, profCfg)
+	return mapKey, true
 }
 
 // parseProfileFromStoreEntry builds a ProfileConfig from the stored JSON.
-func parseProfileFromStoreEntry(raw map[string]any, beaconHdr string) *ProfileConfig {
+func parseProfileFromStoreEntry(raw map[string]any, beaconHdr string) *naxwire.ProfileConfig {
 	jsonBytes, err := json.Marshal(raw)
 	if err != nil {
-		return &ProfileConfig{}
+		return &naxwire.ProfileConfig{}
 	}
 	var profMap map[string]any
 	if err := json.Unmarshal(jsonBytes, &profMap); err != nil {
-		return &ProfileConfig{}
+		return &naxwire.ProfileConfig{}
 	}
-	p := &ProfileConfig{
+	p := &naxwire.ProfileConfig{
 		Rotation: "sequential",
-		Error: ServerError{
+		Error: naxwire.ServerError{
 			Status:  404,
 			Body:    "<!DOCTYPE html>\n<html><body><h1>404</h1></body></html>\n",
 			Headers: map[string]string{"Content-Type": "text/html"},
@@ -120,7 +151,7 @@ func parseProfileFromStoreEntry(raw map[string]any, beaconHdr string) *ProfileCo
 	return p
 }
 
-func parseHTTPTransactionFromStore(profMap map[string]any, key string, tx *HTTPTransaction, isPost bool) {
+func parseHTTPTransactionFromStore(profMap map[string]any, key string, tx *naxwire.HTTPTransaction, isPost bool) {
 	raw, ok := profMap[key].(map[string]any)
 	if !ok {
 		return
@@ -170,8 +201,8 @@ func parseHTTPTransactionFromStore(profMap map[string]any, key string, tx *HTTPT
 	}
 }
 
-func parseOutputConfigFromStore(raw map[string]any) OutputConfig {
-	cfg := OutputConfig{}
+func parseOutputConfigFromStore(raw map[string]any) naxwire.OutputConfig {
+	cfg := naxwire.OutputConfig{}
 	if f, ok := raw["Format"].(string); ok {
 		cfg.Format = f
 	}
@@ -202,7 +233,7 @@ func (s *httpServer) rebuildBeaconIDHeaders() {
 	seen := map[string]bool{s.hbHeader: true}
 	headers := []string{s.hbHeader}
 	addFrom := func(_, v any) bool {
-		p := v.(*ProfileConfig)
+		p := v.(*naxwire.ProfileConfig)
 		hdr := p.BeaconIdHeader
 		if hdr == "" {
 			hdr = "X-Beacon-Id"
@@ -244,21 +275,31 @@ func (s *httpServer) reloadAllProfiles() {
 	if err != nil {
 		return
 	}
-	activeKeys := make(map[string]struct{}, len(keys))
+	activeBeaconIDs := make(map[string]struct{}, len(keys))
+	activeStoreKeys := make(map[string]struct{}, len(keys))
 	changed := false
 	for _, agentID := range keys {
-		activeKeys[agentID] = struct{}{}
-		if s.loadProfileFromStore(agentID) {
+		activeStoreKeys[agentID] = struct{}{}
+		beaconID, updated := s.loadProfileFromStore(agentID)
+		if beaconID != "" {
+			activeBeaconIDs[beaconID] = struct{}{}
+		}
+		if updated {
 			changed = true
 		}
 	}
 	s.agentProfiles.Range(func(key, _ any) bool {
-		if _, ok := activeKeys[key.(string)]; !ok {
+		if _, ok := activeBeaconIDs[key.(string)]; !ok {
 			s.agentProfiles.Delete(key)
 			s.agentPrevProfiles.Delete(key)
-			s.profileStoreRaw.Delete(key)
-			naxListenerLogInfo("removed stale profile override for agent %s", key.(string))
+			naxListenerLogInfo("removed stale profile override for beacon %s", key.(string))
 			changed = true
+		}
+		return true
+	})
+	s.profileStoreRaw.Range(func(key, _ any) bool {
+		if _, ok := activeStoreKeys[key.(string)]; !ok {
+			s.profileStoreRaw.Delete(key)
 		}
 		return true
 	})

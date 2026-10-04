@@ -1,4 +1,4 @@
-package main
+package naxwire
 
 import (
 	"bytes"
@@ -131,7 +131,7 @@ func TestDecodeResultBodyRejectsTruncatedData(t *testing.T) {
 		0x01, 0x00, 0x00, 0x00, // task_id
 		0x00,                   // status
 		0x64, 0x00, 0x00, 0x00, // data_len = 100
-		0xAA, 0xBB, 0xCC, // only 3 bytes
+		0xAA, 0xBB, 0xCC,       // only 3 bytes
 	}
 	if _, _, _, err := DecodeResultBody(bad); err == nil {
 		t.Error("expected error for truncated data field")

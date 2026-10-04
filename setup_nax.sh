@@ -24,9 +24,13 @@ step_msg()    { echo -e "${CYAN}[*]${NC} $1"; }
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 NAX_ROOT="$SCRIPT_DIR"
 SERVER_DIR=""
+ADAPTIX_SRC=""
 ACTION="all"
 GO_BIN=""
 GOEXPERIMENT=""
+SERVER_GO_VERSION=""
+SERVER_AXC2_MODULE=""
+SERVER_AXC2_VERSION=""
 
 ## ========= [ argument parsing ] =========
 
@@ -34,6 +38,10 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         --server)
             SERVER_DIR="$(realpath "$2" 2>/dev/null || echo "$2")"
+            shift 2
+            ;;
+        --adaptix-src)
+            ADAPTIX_SRC="$(realpath "$2" 2>/dev/null || echo "$2")"
             shift 2
             ;;
         --action)
@@ -54,30 +62,34 @@ done
 
 if [ "$ACTION" = "help" ] || [ -z "$SERVER_DIR" ]; then
     cat <<EOF
-Usage: $0 --server <Server_directory> [--action <action>]
+Usage: $0 --server <Server_directory> [--action <action>] [--adaptix-src <dir>]
 
 Required:
   --server <dir>      Path to Adaptix Server directory
                       (contains adaptixserver binary, extenders/, profile.yaml)
 
 Optional:
+  --adaptix-src <dir> Path to Adaptix source tree (contains AdaptixServer/go.mod).
+                      Used to detect axc2 module version for plugin sync.
+                      If omitted, auto-searches common locations.
   --action <action>   Action to perform (default: all)
 
 Actions:
-  all                 Check prereqs + build all plugins + deploy + register
-  plugins             Build and deploy all 4 plugins (skip prereq check)
+  all                 Check prereqs + sync modules + build all + deploy + register
+  plugins             Sync modules + build and deploy all 4 plugins
   agent               Build and deploy agent plugin only
   listener-http       Build and deploy HTTP listener only
   listener-smb        Build and deploy SMB listener only
   service             Build and deploy nax_store service only
   deploy              Deploy only (copy configs, axscripts, templates) - no build
+  sync                Sync go.mod files to match server (no build)
   prereqs             Check build prerequisites only
 
 Examples:
   $0 --server /opt/Server
   $0 --server ../Server --action agent
-  $0 --server /opt/Server --action deploy
-  $0 --server /opt/Server --action prereqs
+  $0 --server /opt/Server --adaptix-src /opt/AdaptixC2
+  $0 --server /opt/Server --action sync
 EOF
     [ "$ACTION" = "help" ] && exit 0
     exit 1
@@ -131,22 +143,185 @@ check_prereqs() {
 detect_goexperiment() {
     local server_bin="$SERVER_DIR/adaptixserver"
     if [ ! -f "$server_bin" ]; then
-        warning_msg "adaptixserver binary not found - using default GOEXPERIMENT"
-        GOEXPERIMENT="jsonv2,greenteagc"
+        warning_msg "adaptixserver binary not found - building without GOEXPERIMENT"
+        GOEXPERIMENT=""
         return
     fi
 
     local version_line
-    version_line=$(strings "$server_bin" 2>/dev/null | grep -m1 '^go[0-9].*X:')
+    version_line=$($GO_BIN version "$server_bin" 2>/dev/null | head -1)
 
-    if [ -z "$version_line" ]; then
-        warning_msg "Could not detect GOEXPERIMENT from adaptixserver - using default"
-        GOEXPERIMENT="jsonv2,greenteagc"
+    if echo "$version_line" | grep -qP 'X:'; then
+        GOEXPERIMENT=$(echo "$version_line" | grep -oP '(?<=X:)\S+')
+        info_msg "Detected GOEXPERIMENT=$GOEXPERIMENT  (from $(basename "$server_bin"))"
+    else
+        GOEXPERIMENT=""
+        info_msg "Server built without GOEXPERIMENT (plain $(echo "$version_line" | grep -oP 'go\d+\.\d+\.\d+'))"
+    fi
+}
+
+## ========= [ Go version detection from server binary ] =========
+
+detect_go_version() {
+    local server_bin="$SERVER_DIR/adaptixserver"
+    if [ ! -f "$server_bin" ]; then
+        warning_msg "adaptixserver binary not found - cannot detect Go version"
         return
     fi
 
-    GOEXPERIMENT="${version_line##*X:}"
-    info_msg "Detected GOEXPERIMENT=$GOEXPERIMENT  (from $(basename "$server_bin"))"
+    local version_line
+    version_line=$(strings "$server_bin" 2>/dev/null | grep -oP '^go\d+\.\d+\.\d+' | head -1)
+
+    if [ -z "$version_line" ]; then
+        warning_msg "Could not detect Go version from adaptixserver binary"
+        return
+    fi
+
+    SERVER_GO_VERSION="${version_line#go}"
+    info_msg "Detected server Go version: $SERVER_GO_VERSION"
+
+    local local_go_version
+    local_go_version=$($GO_BIN version 2>/dev/null | grep -oP 'go\d+\.\d+\.\d+' | head -1)
+    local_go_version="${local_go_version#go}"
+
+    if [ "$local_go_version" != "$SERVER_GO_VERSION" ]; then
+        warning_msg "Go version MISMATCH: local=$local_go_version server=$SERVER_GO_VERSION"
+        warning_msg "Plugins may fail to load. Install go$SERVER_GO_VERSION to match."
+    else
+        info_msg "Go version match: $local_go_version"
+    fi
+}
+
+## ========= [ Adaptix source auto-discovery ] =========
+
+find_adaptix_src() {
+    if [ -n "$ADAPTIX_SRC" ] && [ -f "$ADAPTIX_SRC/AdaptixServer/go.mod" ]; then
+        return
+    fi
+    if [ -n "$ADAPTIX_SRC" ] && [ -f "$ADAPTIX_SRC/go.mod" ]; then
+        ADAPTIX_SRC="$(dirname "$ADAPTIX_SRC")"
+        return
+    fi
+
+    local search_paths=(
+        "/opt/post-exploitation/Original/AdaptixC2"
+        "$(dirname "$NAX_ROOT")/Original/AdaptixC2"
+        "$(dirname "$(dirname "$NAX_ROOT")")/AdaptixC2"
+        "$HOME/AdaptixC2"
+    )
+
+    for path in "${search_paths[@]}"; do
+        if [ -f "$path/AdaptixServer/go.mod" ]; then
+            ADAPTIX_SRC="$path"
+            info_msg "Found Adaptix source at: $ADAPTIX_SRC"
+            return
+        fi
+    done
+
+    warning_msg "Adaptix source not found. Use --adaptix-src to specify location."
+    warning_msg "Module sync will use binary inspection only (less reliable)."
+}
+
+## ========= [ axc2 module detection ] =========
+
+detect_axc2_module() {
+    local server_bin="$SERVER_DIR/adaptixserver"
+    if [ -f "$server_bin" ]; then
+        local mod_info
+        mod_info=$($GO_BIN version -m "$server_bin" 2>/dev/null | grep 'github.com/Adaptix-Framework/axc2')
+        if [ -n "$mod_info" ]; then
+            SERVER_AXC2_MODULE=$(echo "$mod_info" | awk '{print $2}')
+            SERVER_AXC2_VERSION=$(echo "$mod_info" | awk '{print $3}')
+            if [ -n "$SERVER_AXC2_MODULE" ] && [ -n "$SERVER_AXC2_VERSION" ]; then
+                info_msg "Detected axc2 module: $SERVER_AXC2_MODULE@$SERVER_AXC2_VERSION (from binary)"
+                return
+            fi
+        fi
+    fi
+
+    local server_gomod=""
+    if [ -n "$ADAPTIX_SRC" ] && [ -f "$ADAPTIX_SRC/AdaptixServer/go.mod" ]; then
+        server_gomod="$ADAPTIX_SRC/AdaptixServer/go.mod"
+    fi
+
+    if [ -n "$server_gomod" ]; then
+        local axc2_line
+        axc2_line=$(grep 'github.com/Adaptix-Framework/axc2' "$server_gomod" | grep -v '//' | head -1)
+
+        if [ -n "$axc2_line" ]; then
+            SERVER_AXC2_MODULE=$(echo "$axc2_line" | awk '{print $1}')
+            SERVER_AXC2_VERSION=$(echo "$axc2_line" | awk '{print $2}')
+            warning_msg "Using axc2 from go.mod (no binary): $SERVER_AXC2_MODULE@$SERVER_AXC2_VERSION"
+            return
+        fi
+    fi
+
+    warning_msg "Could not detect axc2 module version"
+}
+
+## ========= [ Go module sync ] =========
+
+sync_go_modules() {
+    find_go
+    find_adaptix_src
+    detect_axc2_module
+    detect_go_version
+
+    if [ -z "$SERVER_AXC2_MODULE" ] || [ -z "$SERVER_AXC2_VERSION" ]; then
+        error_exit "Cannot sync: unable to determine server's axc2 module version.\n  Use --adaptix-src to point to AdaptixC2 source tree."
+    fi
+
+    local go_directive="${SERVER_GO_VERSION:-1.26.5}"
+
+    step_msg "Syncing plugin go.mod files to: $SERVER_AXC2_MODULE@$SERVER_AXC2_VERSION (go $go_directive)"
+
+    local plugin_dirs=(
+        "$NAX_ROOT/src_server/agent_nonameax"
+        "$NAX_ROOT/src_server/listener_nonameax_http"
+        "$NAX_ROOT/src_server/listener_nonameax_smb"
+        "$NAX_ROOT/src_server/service_nax_store"
+    )
+
+    for dir in "${plugin_dirs[@]}"; do
+        local plugin_name
+        plugin_name=$(basename "$dir")
+
+        if [ ! -f "$dir/go.mod" ]; then
+            warning_msg "Skipping $plugin_name: no go.mod"
+            continue
+        fi
+
+        step_msg "  Syncing $plugin_name..."
+
+        local current_module
+        current_module=$(grep -oP 'github\.com/Adaptix-Framework/axc2(/v\d+)?' "$dir/go.mod" | head -1)
+        local current_version
+        current_version=$(grep 'github.com/Adaptix-Framework/axc2' "$dir/go.mod" | grep -v '//' | head -1 | grep -oP 'v\d+\.\d+\.\d+')
+
+        if [ "$current_module" = "$SERVER_AXC2_MODULE" ] && [ "$current_version" = "$SERVER_AXC2_VERSION" ]; then
+            info_msg "    $plugin_name already up-to-date"
+            continue
+        fi
+
+        sed -i "s|^go .*|go $go_directive|" "$dir/go.mod"
+
+        if [ -n "$current_module" ] && [ "$current_module" != "$SERVER_AXC2_MODULE" ]; then
+            info_msg "    Import path change: $current_module → $SERVER_AXC2_MODULE"
+
+            find "$dir" -name '*.go' -exec sed -i "s|\"$current_module\"|\"$SERVER_AXC2_MODULE\"|g" {} \;
+            info_msg "    Patched import paths in .go files"
+        fi
+
+        sed -i "s|^go .*|go $go_directive|" "$dir/go.mod"
+        sed -i "s|$current_module $current_version|$SERVER_AXC2_MODULE $SERVER_AXC2_VERSION|" "$dir/go.mod"
+
+        (cd "$dir" && $GO_BIN get "$SERVER_AXC2_MODULE@$SERVER_AXC2_VERSION" 2>/dev/null)
+        (cd "$dir" && $GO_BIN mod tidy 2>/dev/null)
+
+        info_msg "    $plugin_name synced ✓"
+    done
+
+    info_msg "Module sync complete"
 }
 
 ## ========= [ find Go binary ] =========
@@ -326,8 +501,11 @@ print_summary() {
     echo "  Action:       $ACTION"
     echo "  NaX Source:   $NAX_ROOT"
     echo "  Server:       $SERVER_DIR"
+    echo "  Adaptix Src:  ${ADAPTIX_SRC:-not specified}"
     echo "  GOEXPERIMENT: ${GOEXPERIMENT:-n/a}"
-    echo "  Go:           ${GO_BIN:-n/a}"
+    echo "  Go (local):   ${GO_BIN:-n/a}"
+    echo "  Go (server):  ${SERVER_GO_VERSION:-n/a}"
+    echo "  axc2 module:  ${SERVER_AXC2_MODULE:-n/a}@${SERVER_AXC2_VERSION:-n/a}"
     echo ""
     echo "  Deployed extenders:"
     [ -f "$EXTENDERS_DIR/agent_nonameax/agent_nonameax.so" ]              && echo "    - agent_nonameax"
@@ -345,6 +523,7 @@ case $ACTION in
     all)
         check_prereqs
         detect_goexperiment
+        sync_go_modules
         step_msg "Full install: all 4 plugins"
         build_deploy_all
         add_to_profile
@@ -353,6 +532,7 @@ case $ACTION in
     plugins)
         find_go
         detect_goexperiment
+        sync_go_modules
         step_msg "Building all 4 plugins (skipping prereq check)"
         build_deploy_all
         add_to_profile
@@ -361,6 +541,7 @@ case $ACTION in
     agent)
         find_go
         detect_goexperiment
+        sync_go_modules
         build_deploy_agent
         add_to_profile
         print_summary
@@ -368,6 +549,7 @@ case $ACTION in
     listener-http)
         find_go
         detect_goexperiment
+        sync_go_modules
         build_deploy_listener_http
         add_to_profile
         print_summary
@@ -375,6 +557,7 @@ case $ACTION in
     listener-smb)
         find_go
         detect_goexperiment
+        sync_go_modules
         build_deploy_listener_smb
         add_to_profile
         print_summary
@@ -382,6 +565,7 @@ case $ACTION in
     service)
         find_go
         detect_goexperiment
+        sync_go_modules
         build_deploy_service
         add_to_profile
         print_summary
@@ -391,6 +575,11 @@ case $ACTION in
         deploy_all
         add_to_profile
         print_summary
+        ;;
+    sync)
+        find_go
+        detect_goexperiment
+        sync_go_modules
         ;;
     prereqs)
         check_prereqs

@@ -41,6 +41,7 @@ FUNC VOID NaxMain( VOID ) {
     if ( ! Nax ) return;
 
     NaxRuntimeInit();
+    NaxDispatchInit( Nax );
 
     NaxCurrentTeb()->NtTib.ArbitraryUserPointer = Nax;
 

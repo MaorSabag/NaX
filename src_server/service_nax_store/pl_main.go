@@ -64,18 +64,18 @@ func sendJSON(operator string, v any) {
 	data, err := json.Marshal(v)
 	if err != nil {
 		if Ts != nil {
-			Ts.TsLogAdd(adaptix.LogStatusError, 0, "nax_store", "", "JSON marshal failure: %v", err)
+			Ts.TsLogAdd(adaptix.LogStatusError, 0, "nax_store", "JSON marshal failure: %v", err)
 		}
 		return
 	}
-	Ts.TsPluginServiceSendDataClient(operator, "nax_store", string(data))
+	Ts.TsServiceSendDataClient(operator, "nax_store", string(data))
 }
 
 func InitPlugin(ts any, moduleDir string, serviceConfig string) adaptix.PluginService {
 	Ts = ts.(adaptix.Teamserver)
 	ModuleDir = moduleDir
 	if Ts != nil {
-		Ts.TsLogAdd(adaptix.LogStatusSuccess, 1, "nax_store", "", "InitPlugin → service registered")
+		Ts.TsLogAdd(adaptix.LogStatusSuccess, 1, "nax_store", "InitPlugin → service registered")
 	}
 	return &PluginService{}
 }
@@ -87,7 +87,7 @@ func (p *PluginService) CallRPC(operator string, function string, args string) (
 
 func (p *PluginService) Call(operator string, function string, args string) {
 	if Ts != nil {
-		Ts.TsLogAdd(adaptix.LogStatusInfo, 1, "nax_store", "", "RPC: operator=%q function=%q", operator, function)
+		Ts.TsLogAdd(adaptix.LogStatusInfo, 1, "nax_store", "RPC: operator=%q function=%q", operator, function)
 	}
 
 	switch strings.ToLower(function) {
@@ -295,7 +295,7 @@ func handleDelete(operator string, args string) {
 	_ = Ts.TsExtenderDataDelete(extenderNameProfiles, req.AgentID)
 
 	if Ts != nil {
-		Ts.TsLogAdd(adaptix.LogStatusInfo, 1, "nax_store", "", "Deleted store entry: %s", req.AgentID)
+		Ts.TsLogAdd(adaptix.LogStatusInfo, 1, "nax_store", "Deleted store entry: %s", req.AgentID)
 	}
 	sendJSON(operator, resultResponse{
 		Action:  "delete_result",
@@ -320,7 +320,7 @@ func handleClear(operator string) {
 	}
 
 	if Ts != nil {
-		Ts.TsLogAdd(adaptix.LogStatusInfo, 1, "nax_store", "", "Cleared %d store entries", count)
+		Ts.TsLogAdd(adaptix.LogStatusInfo, 1, "nax_store", "Cleared %d store entries", count)
 	}
 	sendJSON(operator, resultResponse{
 		Action:  "clear_result",

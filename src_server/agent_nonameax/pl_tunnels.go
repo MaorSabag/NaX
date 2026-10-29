@@ -16,8 +16,6 @@ const (
 	tunnelCmdAccept     byte = 0x44
 	tunnelCmdPause      byte = 0x45
 	tunnelCmdResume     byte = 0x46
-	tunnelCmdBindReply  byte = 0x48
-
 	STATUS_TUNNEL byte = 0x20
 )
 
@@ -46,17 +44,6 @@ func tunnelConnectTCP(channelId int64, tunnelType, addressType int, address stri
 
 func tunnelConnectUDP(channelId int64, tunnelType, addressType int, address string, port int) adaptix.TaskData {
 	return adaptix.TaskData{}
-}
-
-func tunnelBindTCP(channelId int64, addressType int, address string, port int) adaptix.TaskData {
-	addrBytes := []byte(address)
-	args := make([]byte, 4+4+4+len(addrBytes)+4)
-	binary.LittleEndian.PutUint32(args[0:4], uint32(channelId))
-	binary.LittleEndian.PutUint32(args[4:8], uint32(adaptix.TUNNEL_TYPE_SOCKS_BIND))
-	binary.LittleEndian.PutUint32(args[8:12], uint32(len(addrBytes)))
-	copy(args[12:12+len(addrBytes)], addrBytes)
-	binary.LittleEndian.PutUint32(args[12+len(addrBytes):], uint32(port))
-	return tunnelTask(tunnelCmdConnectTCP, args, priorityTunnelCreate)
 }
 
 func tunnelWriteTCP(channelId int64, data []byte) adaptix.TaskData {
@@ -182,23 +169,6 @@ func processTunnelResult(agentId int64, data []byte) {
 			channelId := int64(binary.LittleEndian.Uint32(payload[0:4]))
 			if Ts != nil {
 				Ts.TsTunnelResume(channelId)
-			}
-
-		case tunnelCmdBindReply:
-			if len(payload) < 16 {
-				break
-			}
-			channelId := int64(binary.LittleEndian.Uint32(payload[0:4]))
-			phase := int(binary.LittleEndian.Uint32(payload[4:8]))
-			atyp := int(binary.LittleEndian.Uint32(payload[8:12]))
-			addrLen := int(binary.LittleEndian.Uint32(payload[12:16]))
-			if len(payload) < 16+addrLen+4 {
-				break
-			}
-			addr := payload[16 : 16+addrLen]
-			port := int(binary.LittleEndian.Uint32(payload[16+addrLen : 16+addrLen+4]))
-			if Ts != nil {
-				Ts.TsTunnelConnectionBindReply(channelId, phase, atyp, addr, port)
 			}
 
 		default:

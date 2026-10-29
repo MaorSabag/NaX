@@ -3,7 +3,7 @@ module nonameax/listener_http
 go 1.26.5
 
 require (
-	github.com/Adaptix-Framework/axc2/v2 v2.0.14
+	github.com/Adaptix-Framework/axc2/v2 v2.0.2
 	nonameax/naxwire v0.0.0
 )
 

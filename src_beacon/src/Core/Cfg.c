@@ -33,9 +33,13 @@ FUNC BOOL NaxCfgAddTarget( PNAX_INSTANCE Nax, PVOID ImageBase, PVOID Function ) 
 
     CFG_CALL_TARGET_INFO cfg;
     cfg.Offset = U_PTR( Function ) - U_PTR( ImageBase );
-    cfg.Flags  = CFG_CALL_TARGET_VALID;
+    cfg.Flags  = CFG_CALL_TARGET_VALID | CFG_CALL_TARGET_CONVERT_EXPORT_SUPPRESSED_TO_VALID;
 
     BOOL ok = Nax->Kernelbase.SetProcessValidCallTargets( (HANDLE)-1, ImageBase, length, 1, &cfg );
+    if ( !ok ) {
+        cfg.Flags = CFG_CALL_TARGET_VALID;
+        ok = Nax->Kernelbase.SetProcessValidCallTargets( (HANDLE)-1, ImageBase, length, 1, &cfg );
+    }
     NaxDbg( Nax, "[cfg] add target: base=%p func=%p offset=0x%llx ok=%d", ImageBase, Function, (UINT64)cfg.Offset, (INT)ok );
     return ok;
 }

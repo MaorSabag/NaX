@@ -111,15 +111,15 @@ func (a *extenderListener) InternalHandler(data []byte) (int64, error) {
 	}
 	beaconID := string(data[:16])
 
-	Ts.TsLogAdd(adaptix.LogStatusInfo, 1, "NoNameAx-SMB", "", "InternalHandler: listener=%s beaconID=%s dataLen=%d keyPrefix=%x", a.name, beaconID, len(data), a.encryptKey[:4])
+	Ts.TsLogAdd(adaptix.LogStatusInfo, 1, "NoNameAx-SMB", "InternalHandler: listener=%s beaconID=%s dataLen=%d keyPrefix=%x", a.name, beaconID, len(data), a.encryptKey[:4])
 
 	if id, ok := Ts.TsAgentIdByUID([]byte(beaconID)); ok {
-		Ts.TsLogAdd(adaptix.LogStatusInfo, 1, "NoNameAx-SMB", "", "InternalHandler: agent already exists, returning %d", id)
+		Ts.TsLogAdd(adaptix.LogStatusInfo, 1, "NoNameAx-SMB", "InternalHandler: agent already exists, returning %d", id)
 		return id, nil
 	}
 
 	ciphertext := data[16:]
-	Ts.TsLogAdd(adaptix.LogStatusInfo, 1, "NoNameAx-SMB", "", "InternalHandler: ciphertextLen=%d first16=%x", len(ciphertext), ciphertext[:min(16, len(ciphertext))])
+	Ts.TsLogAdd(adaptix.LogStatusInfo, 1, "NoNameAx-SMB", "InternalHandler: ciphertextLen=%d first16=%x", len(ciphertext), ciphertext[:min(16, len(ciphertext))])
 
 	beatWithId := make([]byte, 16+16+len(ciphertext))
 	copy(beatWithId[:16], beaconID)
@@ -130,7 +130,7 @@ func (a *extenderListener) InternalHandler(data []byte) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("smb listener: TsAgentCreate: %w", err)
 	}
-	Ts.TsLogAdd(adaptix.LogStatusSuccess, 1, "NoNameAx-SMB", "", "InternalHandler: agent created id=%d", agentData.Id)
+	Ts.TsLogAdd(adaptix.LogStatusSuccess, 1, "NoNameAx-SMB", "InternalHandler: agent created id=%d", agentData.Id)
 	return agentData.Id, nil
 }
 

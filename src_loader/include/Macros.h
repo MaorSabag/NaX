@@ -45,8 +45,9 @@
 //
 // CFG / mitigation policy constants
 //
-#define LDR_PROCESS_CFG_GUARD_POLICY  7   /* ProcessControlFlowGuardPolicy */
-#define LDR_CFG_CALL_TARGET_VALID     1   /* CFG_CALL_TARGET_VALID flag     */
+#define LDR_PROCESS_CFG_GUARD_POLICY           7   /* ProcessControlFlowGuardPolicy                  */
+#define LDR_CFG_CALL_TARGET_VALID              1   /* CFG_CALL_TARGET_VALID                           */
+#define LDR_CFG_CALL_TARGET_CONVERT_EXPORT     4   /* CFG_CALL_TARGET_CONVERT_EXPORT_SUPPRESSED_TO_VALID */
 
 //
 // instance related macros - TLS egghunter retrieval

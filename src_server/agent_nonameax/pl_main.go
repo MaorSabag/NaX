@@ -23,7 +23,7 @@ const naxLogSource = "NoNameAx"
 
 func naxLogInfo(format string, args ...any) {
 	if Ts != nil {
-		Ts.TsLogAdd(adaptix.LogStatusInfo, 1, naxLogSource, "", format, args...)
+		Ts.TsLogAdd(adaptix.LogStatusInfo, 1, naxLogSource, format, args...)
 	} else {
 		fmt.Printf("[NoNameAx] [*] "+format+"\n", args...)
 	}
@@ -31,7 +31,7 @@ func naxLogInfo(format string, args ...any) {
 
 func naxLogOk(format string, args ...any) {
 	if Ts != nil {
-		Ts.TsLogAdd(adaptix.LogStatusSuccess, 1, naxLogSource, "", format, args...)
+		Ts.TsLogAdd(adaptix.LogStatusSuccess, 1, naxLogSource, format, args...)
 	} else {
 		fmt.Printf("[NoNameAx] [+] "+format+"\n", args...)
 	}
@@ -39,7 +39,7 @@ func naxLogOk(format string, args ...any) {
 
 func naxLogErr(format string, args ...any) {
 	if Ts != nil {
-		Ts.TsLogAdd(adaptix.LogStatusError, 0, naxLogSource, "", format, args...)
+		Ts.TsLogAdd(adaptix.LogStatusError, 0, naxLogSource, format, args...)
 	} else {
 		fmt.Printf("[NoNameAx] [-] "+format+"\n", args...)
 	}
@@ -320,7 +320,6 @@ func naxTunnelCallbacks() adaptix.TunnelCallbacks {
 	return adaptix.TunnelCallbacks{
 		ConnectTCP: tunnelConnectTCP,
 		ConnectUDP: tunnelConnectUDP,
-		BindTCP:    tunnelBindTCP,
 		WriteTCP:   tunnelWriteTCP,
 		WriteUDP:   tunnelWriteUDP,
 		Pause:      tunnelPause,

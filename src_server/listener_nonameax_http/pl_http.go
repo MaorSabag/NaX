@@ -32,7 +32,7 @@ const naxListenerLogSource = "NoNameAx-HTTP"
 
 func naxListenerLogInfo(format string, args ...any) {
 	if Ts != nil {
-		Ts.TsLogAdd(adaptix.LogStatusInfo, 1, naxListenerLogSource, "", format, args...)
+		Ts.TsLogAdd(adaptix.LogStatusInfo, 1, naxListenerLogSource, format, args...)
 	} else {
 		fmt.Printf("[NoNameAx-HTTP] [*] "+format+"\n", args...)
 	}
@@ -40,7 +40,7 @@ func naxListenerLogInfo(format string, args ...any) {
 
 func naxListenerLogOk(format string, args ...any) {
 	if Ts != nil {
-		Ts.TsLogAdd(adaptix.LogStatusSuccess, 1, naxListenerLogSource, "", format, args...)
+		Ts.TsLogAdd(adaptix.LogStatusSuccess, 1, naxListenerLogSource, format, args...)
 	} else {
 		fmt.Printf("[NoNameAx-HTTP] [+] "+format+"\n", args...)
 	}
@@ -48,7 +48,7 @@ func naxListenerLogOk(format string, args ...any) {
 
 func naxListenerLogErr(format string, args ...any) {
 	if Ts != nil {
-		Ts.TsLogAdd(adaptix.LogStatusError, 0, naxListenerLogSource, "", format, args...)
+		Ts.TsLogAdd(adaptix.LogStatusError, 0, naxListenerLogSource, format, args...)
 	} else {
 		fmt.Printf("[NoNameAx-HTTP] [-] "+format+"\n", args...)
 	}
@@ -546,7 +546,7 @@ func (s *httpServer) writeResponseOrNoTasks(w http.ResponseWriter, agentId int64
 	var payload []byte
 
 	if s.ts != nil {
-		hosted, _, err := s.ts.TsAgentGetHostedAll(agentId, 0x12c0000)
+		hosted, err := s.ts.TsAgentGetHostedAll(agentId, 0x12c0000)
 		if err == nil && len(hosted) > 0 {
 			payload = hosted
 		}
